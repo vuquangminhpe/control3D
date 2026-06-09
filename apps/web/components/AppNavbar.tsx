@@ -25,7 +25,7 @@ export function AppNavbar() {
         <Link className="brand-mark" href="/">
           <span className="brand-mark-badge">3D</span>
           <div>
-            <strong>control3D</strong>
+            <strong>Control3D</strong>
             <p>Model gallery and editor workspace</p>
           </div>
         </Link>

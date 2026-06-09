@@ -46,7 +46,7 @@ export function ModelEditorWorkspace({
   model,
   versions,
 }: ModelEditorWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("materials");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("scene");
   const editor = useEditor({
     position: model.position,
     rotation: model.rotation,
