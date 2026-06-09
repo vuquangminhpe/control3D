@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Model {
+  id               String       @id @default(uuid())
+  name             String
+  description      String?      @db.Text
+  tags             String[]
+  category         Category     @default(other)
+  elementTypeId    String?
+  elementType      ElementType? @relation(fields: [elementTypeId], references: [id], onDelete: SetNull)
+  license          License      @default(CC0)
+  originalFilename String
+  format           Format
+  fileUrl          String
+  thumbnailUrl     String?
+  fileSize         BigInt
+  polygonCount     Int?
+  vertexCount      Int?
+  materialCount    Int?
+  hasAnimations    Boolean      @default(false)
+  hasTextures      Boolean      @default(false)
+  customProps      Json?
+  boundingBox      Json?
+  position         Float[]      @default([0, 0, 0])
+  rotation         Float[]      @default([0, 0, 0])
+  scale            Float[]      @default([1, 1, 1])
+  downloadCount    Int          @default(0)
+  viewCount        Int          @default(0)
+  versions         ModelVersion[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+model ElementType {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  name        String
+  description String?
+  icon        String?
+  color       String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  schema      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  models      Model[]
+}
+
+model ModelVersion {
+  id            String   @id @default(uuid())
+  modelId       String
+  model         Model    @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  fileUrl       String
+  changeNote    String?
+  createdAt     DateTime @default(now())
+}
+
+enum Category {
+  architecture
+  character
+  vehicle
+  environment
+  prop
+  furniture
+  electronics
+  other
+}
+
+enum License {
+  CC0
+  CC_BY
+  MIT
+  proprietary
+}
+
+enum Format {
+  glb
+  gltf
+  obj
+  fbx
+  stl
+  ply
+  usdz
+}

@@ -1,0 +1,15 @@
+node_modules/
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+.next/
+out/
+coverage/
+.env
+.env.*
+!.env.example
+apps/web/data/*.sqlite
+apps/web/public/uploads/*
+!apps/web/public/uploads/.gitkeep
+!apps/web/public/uploads/models/.gitkeep
