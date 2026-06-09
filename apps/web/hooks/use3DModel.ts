@@ -36,10 +36,11 @@ export function use3DModel(
   src: string,
   options?: { wireframe?: boolean },
 ) {
-  const gltf = useGLTF(src);
+  const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
+  const gltf = useGLTF(src, dracoPath);
 
   useEffect(() => {
-    useGLTF.preload(src);
+    useGLTF.preload(src, dracoPath);
   }, [src]);
 
   return useMemo(

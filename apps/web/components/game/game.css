@@ -1,0 +1,544 @@
+/* 3D Action Game Dashboard CSS Stylesheet */
+
+.game-container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #060913;
+  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  color: #f1f3f9;
+}
+
+.game-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* 1. HUD Styles */
+.hud-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.hud-top-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  background: rgba(8, 12, 28, 0.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 16px 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+}
+
+.hud-stat-group {
+  flex: 1;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stat-label-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.hud-bar-bg {
+  width: 100%;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.hud-bar-fill.hp {
+  background: linear-gradient(90deg, #ff3c00, #ff8c00);
+  box-shadow: 0 0 12px rgba(255, 60, 0, 0.6);
+}
+
+.hud-bar-fill.xp {
+  background: linear-gradient(90deg, #00ff88, #00bfff);
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.6);
+}
+
+.hud-score-card {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-score-card span {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 600;
+}
+
+.hud-score-card strong {
+  font-size: 26px;
+  font-weight: 900;
+  color: #00ffd5;
+  text-shadow: 0 0 12px rgba(0, 255, 213, 0.4);
+}
+
+/* 2. Combo Meter */
+.combo-meter {
+  position: absolute;
+  top: 100px;
+  left: 24px;
+  background: rgba(255, 60, 0, 0.15);
+  border: 1px solid rgba(255, 60, 0, 0.3);
+  border-radius: 12px;
+  padding: 10px 18px;
+  backdrop-filter: blur(8px);
+  animation: pop-in 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  box-shadow: 0 8px 24px rgba(255, 60, 0, 0.2);
+}
+
+.combo-count {
+  font-size: 18px;
+  font-weight: 900;
+  color: #ff5500;
+  text-shadow: 0 0 8px rgba(255, 85, 0, 0.6);
+  letter-spacing: 0.05em;
+}
+
+.combo-text {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.combo-meter.combo-3 {
+  background: rgba(0, 213, 255, 0.15);
+  border: 1px solid rgba(0, 213, 255, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 213, 255, 0.2);
+}
+
+.combo-meter.combo-3 .combo-count {
+  color: #00ffd5;
+  text-shadow: 0 0 8px rgba(0, 255, 213, 0.6);
+}
+
+/* 3. Controls Sidebar */
+.controls-sidebar {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  width: 260px;
+  background: rgba(6, 9, 22, 0.76);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 20px;
+  padding: 16px 20px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.controls-sidebar h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 8px;
+}
+
+.control-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.control-item span:last-child {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  background: #1e2640;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-bottom-width: 3px;
+  border-radius: 5px;
+  font-weight: 700;
+  font-size: 9px;
+  color: #fff;
+  font-family: monospace;
+}
+
+.key.mouse-l {
+  background: #0088ff;
+  border-color: #0055ff;
+}
+
+/* 4. NPC Floating Prompt */
+.npc-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(8, 12, 32, 0.82);
+  border: 1px solid rgba(0, 255, 213, 0.25);
+  box-shadow: 0 0 15px rgba(0, 255, 213, 0.2);
+  border-radius: 12px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateY(-5px);
+  animation: float 2s ease-in-out infinite;
+}
+
+.npc-prompt span {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.key-cap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: #00ffc4;
+  color: #000;
+  font-weight: 800;
+  font-size: 10px;
+  border-radius: 4px;
+}
+
+/* 5. Dialogue System */
+.dialogue-overlay {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 48px);
+  max-width: 720px;
+  z-index: 100;
+  pointer-events: auto;
+}
+
+.dialogue-card {
+  background: rgba(8, 13, 31, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 255, 196, 0.16);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 25px rgba(0, 255, 196, 0.08);
+  border-radius: 24px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: slide-up 0.25s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+.dialogue-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ffc4;
+  box-shadow: 0 0 10px #00ffc4;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.dialogue-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #00ffc4;
+}
+
+.subtitle-indicator {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.dialogue-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.dialogue-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.dialogue-button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dialogue-button:hover {
+  background: rgba(0, 255, 196, 0.1);
+  border-color: rgba(0, 255, 196, 0.4);
+  color: #00ffc4;
+  transform: translateY(-1px);
+}
+
+.dialogue-button.close {
+  background: rgba(255, 60, 0, 0.08);
+  border-color: rgba(255, 60, 0, 0.2);
+  color: #ff6a6a;
+  margin-left: auto;
+}
+
+.dialogue-button.close:hover {
+  background: rgba(255, 60, 0, 0.15);
+  border-color: rgba(255, 60, 0, 0.5);
+  color: #ff4c4c;
+}
+
+/* 6. Damage numbers floating popups */
+.damage-num-popup {
+  font-family: monospace;
+  font-size: 20px;
+  font-weight: 900;
+  color: #ff9900;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 10px rgba(255, 153, 0, 0.6);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.damage-num-popup.critical {
+  color: #ff2a00;
+  font-size: 26px;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 15px rgba(255, 42, 0, 0.8);
+}
+
+.crit-text {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  background: #ff0044;
+  color: #fff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-bottom: -2px;
+}
+
+/* 7. Game Status Screens */
+.game-status-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1000;
+  background: rgba(2, 3, 8, 0.85);
+  backdrop-filter: blur(15px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.status-box {
+  background: rgba(10, 14, 34, 0.88);
+  border: 1px solid rgba(255, 60, 0, 0.2);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+  border-radius: 28px;
+  padding: 40px;
+  max-width: 480px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  animation: zoom-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.15) forwards;
+}
+
+.game-status-screen.victory .status-box {
+  border-color: rgba(0, 255, 196, 0.3);
+  box-shadow: 0 30px 80px rgba(0, 255, 196, 0.08);
+}
+
+.status-box h2 {
+  margin: 0;
+  font-size: 36px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #ff3c00;
+  text-shadow: 0 0 15px rgba(255, 60, 0, 0.5);
+}
+
+.game-status-screen.victory h2 {
+  color: #00ffc4;
+  text-shadow: 0 0 15px rgba(0, 255, 196, 0.5);
+}
+
+.status-box p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.stats-row {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 16px 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.stats-row strong {
+  color: #fff;
+  font-size: 16px;
+}
+
+.hud-action-button {
+  background: linear-gradient(135deg, #ff5500, #d50000);
+  border: none;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 14px 28px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 12px 30px rgba(255, 60, 0, 0.3);
+  transition: all 0.2s ease;
+}
+
+.hud-action-button.victory {
+  background: linear-gradient(135deg, #00ff88, #00bfff);
+  box-shadow: 0 12px 30px rgba(0, 255, 136, 0.3);
+  color: #000;
+}
+
+.hud-action-button:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.15);
+}
+
+/* 8. Loader & Spinners */
+.loading-spinner {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #00ffc4;
+  text-shadow: 0 0 10px rgba(0, 255, 196, 0.4);
+  padding: 12px 24px;
+  background: rgba(8, 12, 28, 0.8);
+  border: 1px solid rgba(0, 255, 196, 0.2);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+}
+
+/* Keyframes animations */
+@keyframes pop-in {
+  from { transform: scale(0.8); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes zoom-in {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { transform: translate(-50%, 40px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+@keyframes float {
+  0% { transform: translateY(-5px); }
+  50% { transform: translateY(-11px); }
+  100% { transform: translateY(-5px); }
+}
+
+@keyframes pulse {
+  0% { opacity: 0.5; box-shadow: 0 0 4px #00ffc4; }
+  50% { opacity: 1; box-shadow: 0 0 14px #00ffc4; }
+  100% { opacity: 0.5; box-shadow: 0 0 4px #00ffc4; }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .hud-top-panel {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 16px;
+  }
+  
+  .hud-stat-group {
+    max-width: none;
+  }
+  
+  .controls-sidebar {
+    display: none; /* Hide manual on mobile devices */
+  }
+  
+  .dialogue-card {
+    padding: 16px 20px;
+  }
+}
