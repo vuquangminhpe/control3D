@@ -37,9 +37,6 @@ type OrbitControlsLike = {
 };
 
 type CanvasGlProp = ComponentProps<typeof Canvas>["gl"];
-type RendererGlProps = Record<string, unknown> & {
-  canvas?: HTMLCanvasElement;
-};
 
 type InspectViewerProps = {
   src: string;
@@ -61,7 +58,7 @@ function ViewerCanvas({
   const [rendererLabel, setRendererLabel] = useState(getInitialRendererLabel());
 
   const gl = useMemo<CanvasGlProp>(
-    () => async (props: RendererGlProps) => {
+    () => async (props: { canvas?: unknown }) => {
       if (!(props.canvas instanceof HTMLCanvasElement)) {
         throw new Error("Canvas element is required");
       }
