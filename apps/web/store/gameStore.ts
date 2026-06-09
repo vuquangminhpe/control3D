@@ -36,6 +36,18 @@ export type DialogNode = {
   options: DialogOption[];
 };
 
+const PLAYER_SPAWN_POSITION: [number, number, number] = [0, 1.5, 5];
+const ROBOT_SPAWN_POSITION: [number, number, number] = [10, 1.2, -5];
+
+function createInitialEnemies(): EnemyState[] {
+  return [
+    { id: "e1", type: "zombie_low", position: [15, 1.2, -10], health: 40, maxHealth: 40, isDead: false, actionState: "idle" },
+    { id: "e2", type: "zombie_low", position: [5, 1.2, -18], health: 40, maxHealth: 40, isDead: false, actionState: "idle" },
+    { id: "e3", type: "zombie_fantasy", position: [-12, 1.2, -8], health: 100, maxHealth: 100, isDead: false, actionState: "idle" },
+    { id: "e4", type: "zombie_fantasy", position: [-5, 1.2, -22], health: 120, maxHealth: 120, isDead: false, actionState: "idle" },
+  ];
+}
+
 interface GameState {
   // Game Status
   status: GameStatus;
@@ -52,6 +64,8 @@ interface GameState {
   playerTargetMove: [number, number, number] | null;
   isPlayerAttacking: boolean;
   comboCount: number;
+  worldVersion: number;
+  enemySpawnVersion: number;
 
   // Enemies / NPCs
   enemies: EnemyState[];
@@ -109,7 +123,7 @@ const robotDialogueTree: Record<string, DialogNode> = {
   },
   stats: {
     id: "stats",
-    text: "Scanning your bio-signature... You are a high-tech Paladin. Your glowing sword deals massive combo damage (combo x3 triggers a Heavy sweep). Press J/Space to attack, Shift/I to Block.",
+    text: "Scanning your bio-signature... You are a high-tech Paladin. Your glowing sword deals massive combo damage (combo x3 triggers a Heavy sweep). Press J to attack, Space to jump, and Shift to Block.",
     options: [
       { text: "Alright, let's fight!", nextNodeId: "accept" },
     ],
@@ -140,31 +154,41 @@ export const useGameStore = create<GameState>((set, get) => ({
   
   playerHp: 100,
   playerMaxHp: 100,
-  playerPosition: [0, 1.5, 5],
+  playerPosition: PLAYER_SPAWN_POSITION,
   playerVelocity: [0, 0, 0],
   playerTargetMove: null,
   isPlayerAttacking: false,
   comboCount: 0,
+  worldVersion: 0,
+  enemySpawnVersion: 0,
 
   enemies: [],
-  robotPosition: [10, 1.2, -5],
+  robotPosition: ROBOT_SPAWN_POSITION,
   activeDialogueNpcId: null,
   dialogueNode: null,
   
   floatingDamages: [],
 
   startGame: () => {
-    set({
+    set((state) => ({
       status: "playing",
       score: 0,
       level: 1,
       xp: 0,
+      nextLevelXp: 100,
       playerHp: 100,
+      playerMaxHp: 100,
+      playerPosition: [...PLAYER_SPAWN_POSITION],
+      playerVelocity: [0, 0, 0],
       playerTargetMove: null,
       isPlayerAttacking: false,
       comboCount: 0,
+      robotPosition: [...ROBOT_SPAWN_POSITION],
+      activeDialogueNpcId: null,
+      dialogueNode: null,
       floatingDamages: [],
-    });
+      worldVersion: state.worldVersion + 1,
+    }));
     get().spawnEnemies();
   },
 
@@ -173,13 +197,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   setPlayerTargetMove: (target) => set({ playerTargetMove: target }),
   
   damagePlayer: (amount) => {
+    const currentPosition = get().playerPosition;
     set((state) => {
       const newHp = Math.max(state.playerHp - amount, 0);
       return {
         playerHp: newHp,
         status: newHp <= 0 ? "game_over" : state.status,
+        playerTargetMove: newHp <= 0 ? null : state.playerTargetMove,
+        isPlayerAttacking: newHp <= 0 ? false : state.isPlayerAttacking,
+        comboCount: newHp <= 0 ? 0 : state.comboCount,
       };
     });
+    get().addDamageNumber(amount, [currentPosition[0], currentPosition[1] + 2.2, currentPosition[2]], false);
   },
 
   healPlayer: (amount) => {
@@ -214,15 +243,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   triggerAttackEnd: () => set({ isPlayerAttacking: false }),
 
   spawnEnemies: () => {
-    const initialEnemies: EnemyState[] = [
-      // Close to robot
-      { id: "e1", type: "zombie_low", position: [15, 1.2, -10], health: 40, maxHealth: 40, isDead: false, actionState: "idle" },
-      { id: "e2", type: "zombie_low", position: [5, 1.2, -18], health: 40, maxHealth: 40, isDead: false, actionState: "idle" },
-      // Further in the ruins
-      { id: "e3", type: "zombie_fantasy", position: [-12, 1.2, -8], health: 100, maxHealth: 100, isDead: false, actionState: "idle" },
-      { id: "e4", type: "zombie_fantasy", position: [-5, 1.2, -22], health: 120, maxHealth: 120, isDead: false, actionState: "idle" },
-    ];
-    set({ enemies: initialEnemies });
+    set((state) => ({
+      enemies: createInitialEnemies(),
+      enemySpawnVersion: state.enemySpawnVersion + 1,
+    }));
   },
 
   updateEnemyPosition: (id, pos) => {

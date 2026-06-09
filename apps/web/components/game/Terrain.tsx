@@ -15,8 +15,10 @@ export function Terrain() {
   // Optimize material parameters, shadows and ensure static caching
   const optimizedScene = useMemo(() => {
     const cloned = scene.clone();
+    cloned.name = "terrain-root";
     cloned.traverse((child) => {
       if (child instanceof THREE.Mesh) {
+        child.userData.isTerrainSurface = true;
         child.castShadow = true;
         child.receiveShadow = true;
         

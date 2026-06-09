@@ -78,7 +78,7 @@ function ViewerCanvas({
         dpr={[1, 2]}
         gl={gl}
         onPointerMissed={onPointerMissed}
-        shadows
+        shadows="percentage"
         style={{ height: "100%", width: "100%" }}
       >
         <color attach="background" args={["#f3f0ea"]} />

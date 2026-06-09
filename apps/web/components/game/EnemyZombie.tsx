@@ -5,7 +5,9 @@ import { useFrame } from "@react-three/fiber";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import { RigidBody, CapsuleCollider } from "@react-three/rapier";
 import * as THREE from "three";
+import { SkeletonUtils } from "three-stdlib";
 import { useGameStore } from "@/store/gameStore";
+import { stabilizeClipRootMotion, stripPositionTracks } from "./animationUtils";
 
 type EnemyZombieProps = {
   id: string;
@@ -14,26 +16,27 @@ type EnemyZombieProps = {
 export function EnemyZombie({ id }: EnemyZombieProps) {
   const rigidBodyRef = useRef<any>(null);
   const groupRef = useRef<THREE.Group>(null);
+  const initialPositionRef = useRef<[number, number, number]>(
+    useGameStore.getState().enemies.find((entry) => entry.id === id)?.position ?? [0, 1.2, 0]
+  );
+  const lastSyncedPositionRef = useRef<[number, number, number]>(initialPositionRef.current);
+  const lastPositionSyncTimeRef = useRef(0);
 
   // Zustand state and actions
-  const enemy = useGameStore((state) => state.enemies.find((e) => e.id === id));
-  const playerPosition = useGameStore((state) => state.playerPosition);
-  const playerHp = useGameStore((state) => state.playerHp);
-  const damagePlayer = useGameStore((state) => state.damagePlayer);
+  const enemyType = useGameStore((state) => state.enemies.find((e) => e.id === id)?.type);
+  const enemyHealth = useGameStore((state) => state.enemies.find((e) => e.id === id)?.health ?? 0);
+  const enemyMaxHealth = useGameStore((state) => state.enemies.find((e) => e.id === id)?.maxHealth ?? 1);
+  const enemyIsDead = useGameStore((state) => state.enemies.find((e) => e.id === id)?.isDead ?? true);
   const updateEnemyPosition = useGameStore((state) => state.updateEnemyPosition);
   const updateEnemyState = useGameStore((state) => state.updateEnemyState);
-  const blockActive = useGameStore((state) => {
-    // We can assume player is blocking if actionState === block
-    return state.playerHp > 0 && !state.isPlayerAttacking; 
-  });
 
   const [animState, setAnimState] = useState<string>("idle");
   const lastAttackTime = useRef<number>(0);
   const isCurrentlyAttacking = useRef<boolean>(false);
 
-  if (!enemy) return null;
+  if (!enemyType) return null;
 
-  const isFantasy = enemy.type === "zombie_fantasy";
+  const isFantasy = enemyType === "zombie_fantasy";
 
   // 1. Load GLB based on zombie type
   const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
@@ -42,27 +45,34 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
     : "/models/low_poly_zombie_game_animation.glb";
 
   const { scene, animations } = useGLTF(modelUrl, dracoPath);
+  const stabilizedAnimations = useMemo(
+    () =>
+      animations.map((clip) => {
+        const nextClip = stabilizeClipRootMotion(clip.clone());
+        return isFantasy ? stripPositionTracks(nextClip) : nextClip;
+      }),
+    [animations, isFantasy]
+  );
 
   // Clone scene so multiple zombies don't share the same root transform
+  const modelScale = isFantasy ? 0.27 : 0.1;
+
   const clonedScene = useMemo(() => {
-    const cloned = scene.clone();
+    const cloned = SkeletonUtils.clone(scene) as THREE.Group;
     cloned.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
+        child.castShadow = false;
+        child.receiveShadow = false;
+        child.frustumCulled = true;
       }
     });
-
-    if (isFantasy) {
-      cloned.scale.setScalar(0.7);
-    } else {
-      cloned.scale.setScalar(1.2);
-    }
+    cloned.scale.setScalar(modelScale);
+    cloned.position.set(0, 0, 0);
     return cloned;
-  }, [scene, isFantasy]);
+  }, [scene, modelScale]);
 
   // 2. Setup Animations
-  const { ref: animRef, actions, mixer } = useAnimations(animations, groupRef);
+  const { actions, mixer } = useAnimations(stabilizedAnimations, clonedScene);
 
   // Animation mapping helper
   const animationMap = useMemo(() => {
@@ -131,20 +141,38 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
   // 3. AI Chase and Attack Logic
   useFrame((state, delta) => {
-    if (!rigidBodyRef.current || !groupRef.current || enemy.isDead) {
-      if (enemy.isDead && animState !== "death") {
+    const gameState = useGameStore.getState();
+    const playerPosition = gameState.playerPosition;
+    const playerHp = gameState.playerHp;
+
+    if (!rigidBodyRef.current || !groupRef.current || enemyIsDead) {
+      if (enemyIsDead && animState !== "death") {
         setAnimState("death");
         rigidBodyRef.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
       }
       return;
     }
 
+    clonedScene.position.set(0, 0, 0);
+
     const body = rigidBodyRef.current;
     const pos = body.translation();
     const currentPosVec = new THREE.Vector3(pos.x, pos.y, pos.z);
 
-    // Sync position in Zustand
-    updateEnemyPosition(id, [pos.x, pos.y, pos.z]);
+    const nextPosition: [number, number, number] = [pos.x, pos.y, pos.z];
+    const lastPosition = lastSyncedPositionRef.current;
+    if (
+      state.clock.elapsedTime - lastPositionSyncTimeRef.current > 0.1 &&
+      (
+        Math.abs(nextPosition[0] - lastPosition[0]) > 0.05 ||
+        Math.abs(nextPosition[1] - lastPosition[1]) > 0.05 ||
+        Math.abs(nextPosition[2] - lastPosition[2]) > 0.05
+      )
+    ) {
+      lastSyncedPositionRef.current = nextPosition;
+      lastPositionSyncTimeRef.current = state.clock.elapsedTime;
+      updateEnemyPosition(id, nextPosition);
+    }
 
     // Dead player -> idle
     if (playerHp <= 0) {
@@ -165,7 +193,7 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
     // Trigger hit react state if HP is reduced recently
     // Wait, the damage animation is played when hit
-    if (enemy.health <= 0) {
+    if (enemyHealth <= 0) {
       updateEnemyState(id, { isDead: true });
       setAnimState("death");
       return;
@@ -187,22 +215,24 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
         // Deal damage to player on impact frame (simulate with half cooldown timeout)
         setTimeout(() => {
-          if (enemy.isDead || playerHp <= 0) return;
+          const gameState = useGameStore.getState();
+          const latestEnemy = gameState.enemies.find((entry) => entry.id === id);
+          if (!latestEnemy || latestEnemy.isDead || gameState.playerHp <= 0) return;
           
           // Re-evaluate distance
           const newPos = rigidBodyRef.current?.translation();
           if (!newPos) return;
           const freshEnemyPos = new THREE.Vector3(newPos.x, newPos.y, newPos.z);
-          const freshPlayerPos = new THREE.Vector3(...useGameStore.getState().playerPosition);
+          const freshPlayerPos = new THREE.Vector3(...gameState.playerPosition);
           const d = freshEnemyPos.distanceTo(freshPlayerPos);
 
           if (d <= attackRange + 0.5) {
             // Apply damage, blocking reduces damage by 75%
-            const isBlocking = blockActive;
+            const isBlocking = gameState.playerHp > 0 && !gameState.isPlayerAttacking;
             const rawDamage = isFantasy ? 20 : 10;
             const finalDamage = isBlocking ? Math.max(Math.floor(rawDamage * 0.25), 1) : rawDamage;
             
-            damagePlayer(finalDamage);
+            gameState.damagePlayer(finalDamage);
           }
         }, 500);
       }
@@ -232,15 +262,17 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
     <RigidBody
       ref={rigidBodyRef}
       colliders={false}
-      position={enemy.position}
+      position={initialPositionRef.current}
       enabledRotations={[false, false, false]}
       type="dynamic"
       linearDamping={1}
+      ccd
+      canSleep={false}
     >
       <CapsuleCollider args={[0.7, 0.4]} position={[0, 1.1, 0]} />
       
       {/* 3D Billboard HP Bar above head */}
-      {!enemy.isDead && (
+      {!enemyIsDead && (
         <group position={[0, 2.3, 0]}>
           {/* Background */}
           <mesh position={[0, 0, 0]}>
@@ -248,15 +280,15 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
             <meshBasicMaterial color="#333333" toneMapped={false} />
           </mesh>
           {/* Health fill */}
-          <mesh position={[((enemy.health / enemy.maxHealth) - 1) * 0.6, 0, 0.01]}>
-            <planeGeometry args={[1.2 * (enemy.health / enemy.maxHealth), 0.1]} />
+          <mesh position={[((enemyHealth / enemyMaxHealth) - 1) * 0.6, 0, 0.01]}>
+            <planeGeometry args={[1.2 * (enemyHealth / enemyMaxHealth), 0.1]} />
             <meshBasicMaterial color={isFantasy ? "#ff3c00" : "#ffaa00"} toneMapped={false} />
           </mesh>
         </group>
       )}
 
       <group ref={groupRef}>
-        <primitive object={clonedScene} ref={animRef} />
+        <primitive object={clonedScene} />
       </group>
     </RigidBody>
   );

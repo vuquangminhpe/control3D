@@ -14,10 +14,9 @@ import { FloatingDamage } from "./FloatingDamage";
 
 // Camera controller that tracks the player smoothly
 function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject<any> }) {
-  const playerPosition = useGameStore((state) => state.playerPosition);
-
   useFrame(() => {
     if (!controlsRef.current) return;
+    const playerPosition = useGameStore.getState().playerPosition;
     
     // Smoothly lerp camera focus target to the player position
     const target = new THREE.Vector3(...playerPosition);
@@ -31,10 +30,18 @@ function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject
     <OrbitControls
       ref={controlsRef}
       enableDamping
+      enablePan={false}
+      enableRotate
       dampingFactor={0.08}
       minDistance={6}
       maxDistance={24}
+      minPolarAngle={Math.PI / 3}
       maxPolarAngle={Math.PI / 2.15} // prevents camera from dipping below horizontal ground level
+      mouseButtons={{
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      }}
       makeDefault
     />
   );
@@ -50,8 +57,8 @@ export function GameCanvas() {
   const enemies = useGameStore((state) => state.enemies);
   const floatingDamages = useGameStore((state) => state.floatingDamages);
   const spawnEnemies = useGameStore((state) => state.spawnEnemies);
-  const setTargetMove = useGameStore((state) => state.setPlayerTargetMove);
-  const activeDialogueNpcId = useGameStore((state) => state.activeDialogueNpcId);
+  const worldVersion = useGameStore((state) => state.worldVersion);
+  const enemySpawnVersion = useGameStore((state) => state.enemySpawnVersion);
 
   // Initialize and spawn enemies
   useEffect(() => {
@@ -61,7 +68,8 @@ export function GameCanvas() {
   return (
     <div className="game-canvas-container">
       <Canvas
-        shadows
+        shadows="percentage"
+        dpr={[1, 1.25]}
         camera={{ position: [0, 12, 14], fov: 50, near: 0.1, far: 500 }}
         style={{ height: "100%", width: "100%" }}
       >
@@ -81,7 +89,7 @@ export function GameCanvas() {
           shadow-camera-bottom={-25}
           shadow-bias={-0.0005}
         />
-        <pointLight position={[-10, 8, -10]} intensity={0.5} color="#00ffaa" />
+        <pointLight position={[-10, 8, -10]} intensity={0.25} color="#00ffaa" />
 
         {/* Sky and Environment preset */}
         <Sky sunPosition={[15, 25, 15]} inclination={0} azimuth={0.25} distance={1000} />
@@ -93,31 +101,16 @@ export function GameCanvas() {
             <Terrain />
 
             {/* Playable Character */}
-            <Player />
+            <Player key={`player-${worldVersion}`} />
 
             {/* Patrol Robot NPC */}
-            <PatrolRobot />
+            <PatrolRobot key={`robot-${worldVersion}`} />
 
             {/* Spawn Zombie Enemies */}
             {enemies.map((e) => (
-              <EnemyZombie key={e.id} id={e.id} />
+              <EnemyZombie key={`enemy-${enemySpawnVersion}-${e.id}`} id={e.id} />
             ))}
 
-            {/* Invisible Ground Plane to intercept target clicks */}
-            <mesh
-              rotation={[-Math.PI / 2, 0, 0]}
-              position={[0, 0.5, 0]}
-              receiveShadow
-              onPointerDown={(e) => {
-                if (e.button === 0 && !activeDialogueNpcId) {
-                  e.stopPropagation();
-                  setTargetMove([e.point.x, e.point.y, e.point.z]);
-                }
-              }}
-            >
-              <planeGeometry args={[500, 500]} />
-              <meshStandardMaterial visible={false} />
-            </mesh>
           </Physics>
 
           {/* Floating Damage Popup Numbers */}

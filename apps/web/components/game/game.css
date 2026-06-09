@@ -213,6 +213,11 @@
   border-color: #0055ff;
 }
 
+.key.mouse-r {
+  background: #ff7a00;
+  border-color: #d65100;
+}
+
 /* 4. NPC Floating Prompt */
 .npc-prompt {
   display: flex;
@@ -362,6 +367,8 @@
   flex-direction: column;
   align-items: center;
   white-space: nowrap;
+  animation: damage-float 0.8s ease-out forwards;
+  will-change: transform, opacity;
 }
 
 .damage-num-popup.critical {
@@ -520,6 +527,17 @@
   0% { opacity: 0.5; box-shadow: 0 0 4px #00ffc4; }
   50% { opacity: 1; box-shadow: 0 0 14px #00ffc4; }
   100% { opacity: 0.5; box-shadow: 0 0 4px #00ffc4; }
+}
+
+@keyframes damage-float {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-32px) scale(1.08);
+  }
 }
 
 /* Responsive adjustments */

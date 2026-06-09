@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
-import { useFBX, useHelper } from "@react-three/drei";
+import { useFBX } from "@react-three/drei";
 import * as THREE from "three";
 import { SkeletonUtils } from "three-stdlib";
+import { stabilizeClipRootMotion } from "./animationUtils";
 
 type PaladinCharacterProps = {
   currentAction: string;
@@ -18,6 +19,8 @@ export function PaladinCharacter({
   const groupRef = useRef<THREE.Group>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionsRef = useRef<Record<string, THREE.AnimationAction>>({});
+  const onAnimationFinishedRef = useRef(onAnimationFinished);
+  const activeActionNameRef = useRef<string>("idle");
 
   // 1. Load Main Model
   const originalModel = useFBX("/models/ProS/Paladin J Nordstrom.fbx");
@@ -54,12 +57,21 @@ export function PaladinCharacter({
     idle: useFBX("/models/ProS/sword and shield idle.fbx"),
     walk: useFBX("/models/ProS/sword and shield walk.fbx"),
     run: useFBX("/models/ProS/sword and shield run.fbx"),
+    jump: useFBX("/models/ProS/sword and shield jump.fbx"),
+    hit: useFBX("/models/ProS/sword and shield impact.fbx"),
     attack: useFBX("/models/ProS/sword and shield attack.fbx"),
+    attackAlt1: useFBX("/models/ProS/sword and shield attack (2).fbx"),
+    attackAlt2: useFBX("/models/ProS/sword and shield attack (3).fbx"),
+    attackAlt3: useFBX("/models/ProS/sword and shield slash (2).fbx"),
     slash: useFBX("/models/ProS/sword and shield slash.fbx"),
     kick: useFBX("/models/ProS/sword and shield kick.fbx"),
     block: useFBX("/models/ProS/sword and shield block.fbx"),
     death: useFBX("/models/ProS/sword and shield death.fbx"),
   };
+
+  useEffect(() => {
+    onAnimationFinishedRef.current = onAnimationFinished;
+  }, [onAnimationFinished]);
 
   // 3. Attach Neon Sword and Glassmorphic Shield to bones
   useEffect(() => {
@@ -173,19 +185,23 @@ export function PaladinCharacter({
 
     const mixer = new THREE.AnimationMixer(model);
     mixerRef.current = mixer;
+    activeActionNameRef.current = "idle";
 
     const actions: Record<string, THREE.AnimationAction> = {};
 
     // Map animation clips from each loaded FBX file
     Object.entries(animFBXs).forEach(([name, fbx]) => {
       if (fbx.animations && fbx.animations.length > 0) {
-        const clip = fbx.animations[0].clone();
+        const clip = stabilizeClipRootMotion(fbx.animations[0].clone());
         clip.name = name;
         
         const action = mixer.clipAction(clip);
+        action.enabled = true;
+        action.timeScale = 1;
+        action.setEffectiveWeight(1);
         
         // Loop modes & restrictions
-        if (["attack", "slash", "kick", "death"].includes(name)) {
+        if (["jump", "hit", "attack", "attackAlt1", "attackAlt2", "attackAlt3", "slash", "kick", "death"].includes(name)) {
           action.setLoop(THREE.LoopOnce, 1);
           action.clampWhenFinished = true;
         } else {
@@ -206,23 +222,23 @@ export function PaladinCharacter({
     // Animation completion event listener
     const onFinished = (e: any) => {
       const actionName = e.action.getClip().name;
-      onAnimationFinished?.(actionName);
+      onAnimationFinishedRef.current?.(actionName);
     };
     mixer.addEventListener("finished", onFinished);
 
     return () => {
       mixer.removeEventListener("finished", onFinished);
       mixer.stopAllAction();
+      actionsRef.current = {};
+      mixerRef.current = null;
     };
-  }, [model, onAnimationFinished]);
+  }, [model]);
 
   // 5. Action transitions / crossfading state machine
-  const activeActionNameRef = useRef<string>("idle");
-
   useEffect(() => {
     const actions = actionsRef.current;
     const prevActionName = activeActionNameRef.current;
-    const nextActionName = currentAction;
+    const nextActionName = actions[currentAction] ? currentAction : "idle";
 
     if (prevActionName === nextActionName) return;
 
@@ -231,15 +247,19 @@ export function PaladinCharacter({
 
     if (nextAction) {
       nextAction.reset();
+      nextAction.enabled = true;
+      nextAction.timeScale = 1;
+      nextAction.setEffectiveWeight(1);
       
       // Customize fade durations based on states
       let fadeDuration = 0.25;
-      if (["attack", "slash", "kick"].includes(nextActionName)) {
+      if (["jump", "hit", "attack", "attackAlt1", "attackAlt2", "attackAlt3", "slash", "kick"].includes(nextActionName)) {
         fadeDuration = 0.1; // Fast transition for attacks
       }
       
       if (prevAction) {
         nextAction.crossFadeFrom(prevAction, fadeDuration, true);
+        prevAction.fadeOut(fadeDuration);
       }
       
       nextAction.play();
@@ -266,7 +286,12 @@ useFBX.preload("/models/ProS/Paladin J Nordstrom.fbx");
 useFBX.preload("/models/ProS/sword and shield idle.fbx");
 useFBX.preload("/models/ProS/sword and shield walk.fbx");
 useFBX.preload("/models/ProS/sword and shield run.fbx");
+useFBX.preload("/models/ProS/sword and shield jump.fbx");
+useFBX.preload("/models/ProS/sword and shield impact.fbx");
 useFBX.preload("/models/ProS/sword and shield attack.fbx");
+useFBX.preload("/models/ProS/sword and shield attack (2).fbx");
+useFBX.preload("/models/ProS/sword and shield attack (3).fbx");
+useFBX.preload("/models/ProS/sword and shield slash (2).fbx");
 useFBX.preload("/models/ProS/sword and shield slash.fbx");
 useFBX.preload("/models/ProS/sword and shield kick.fbx");
 useFBX.preload("/models/ProS/sword and shield block.fbx");

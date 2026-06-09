@@ -74,12 +74,19 @@ export function HUD() {
         </div>
         <div className="control-item">
           <span className="key mouse-l">Click</span>
-          <span>Target Destination</span>
+          <span>Rotate Camera</span>
+        </div>
+        <div className="control-item">
+          <span className="key mouse-r">RMB</span>
+          <span>Random Attack</span>
         </div>
         <div className="control-item">
           <span className="key">J</span>
-          <span className="key">Space</span>
           <span>Light Slash / Combo</span>
+        </div>
+        <div className="control-item">
+          <span className="key">Space</span>
+          <span>Jump</span>
         </div>
         <div className="control-item">
           <span className="key">K</span>

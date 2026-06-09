@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Html } from "@react-three/drei";
+import { useEffect, useMemo, useRef } from "react";
+import { CanvasTexture, Group, LinearFilter, Sprite, SpriteMaterial, SRGBColorSpace } from "three";
+import { useFrame } from "@react-three/fiber";
 import { useGameStore } from "@/store/gameStore";
 
 type FloatingDamageProps = {
@@ -11,50 +12,92 @@ type FloatingDamageProps = {
   isCritical: boolean;
 };
 
+function createDamageTexture(amount: number, isCritical: boolean) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = isCritical ? 160 : 128;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return null;
+  }
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.lineJoin = "round";
+  context.lineWidth = 14;
+  context.strokeStyle = "#000000";
+  context.fillStyle = isCritical ? "#ff2a00" : "#ff9900";
+  context.font = `900 ${isCritical ? 64 : 56}px monospace`;
+  context.strokeText(String(amount), canvas.width / 2, isCritical ? 98 : 72);
+  context.fillText(String(amount), canvas.width / 2, isCritical ? 98 : 72);
+
+  if (isCritical) {
+    context.font = "800 26px monospace";
+    context.strokeText("CRIT!", canvas.width / 2, 36);
+    context.fillText("CRIT!", canvas.width / 2, 36);
+  }
+
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  texture.minFilter = LinearFilter;
+  texture.magFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export function FloatingDamage({ id, amount, position, isCritical }: FloatingDamageProps) {
   const removeDamageNumber = useGameStore((state) => state.removeDamageNumber);
-  const [yOffset, setYOffset] = useState<number>(0);
-  const [opacity, setOpacity] = useState<number>(1);
+  const groupRef = useRef<Group>(null);
+  const spriteRef = useRef<Sprite>(null);
+  const elapsedRef = useRef(0);
+  const texture = useMemo(() => createDamageTexture(amount, isCritical), [amount, isCritical]);
 
   useEffect(() => {
-    // Animate the damage number sliding up and fading out
-    let startTime = Date.now();
-    const duration = 800; // ms
+    elapsedRef.current = 0;
+    return () => {
+      texture?.dispose();
+    };
+  }, [texture]);
 
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const progress = elapsed / duration;
+  useFrame((_, delta) => {
+    elapsedRef.current += delta;
+    const progress = Math.min(elapsedRef.current / 0.8, 1);
 
-      if (progress >= 1) {
-        clearInterval(interval);
-        removeDamageNumber(id);
-      } else {
-        setYOffset(progress * 1.5); // slide up to 1.5 units
-        setOpacity(1 - progress); // fade out
-      }
-    }, 16);
+    if (groupRef.current) {
+      groupRef.current.position.set(
+        position[0],
+        position[1] + progress * 1.6,
+        position[2]
+      );
+    }
 
-    return () => clearInterval(interval);
-  }, [id, removeDamageNumber]);
+    if (spriteRef.current) {
+      const material = spriteRef.current.material as SpriteMaterial;
+      material.opacity = 1 - progress;
+      const scale = isCritical ? 1.5 : 1.15;
+      spriteRef.current.scale.set(scale, scale * 0.58, 1);
+    }
 
-  const animatedPosition: [number, number, number] = [
-    position[0],
-    position[1] + yOffset,
-    position[2],
-  ];
+    if (progress >= 1) {
+      removeDamageNumber(id);
+    }
+  });
+
+  if (!texture) {
+    return null;
+  }
 
   return (
-    <Html position={animatedPosition} center sprite distanceFactor={10}>
-      <div
-        className={`damage-num-popup ${isCritical ? "critical" : ""}`}
-        style={{
-          opacity,
-          transform: `scale(${isCritical ? 1.4 : 1})`,
-        }}
-      >
-        {isCritical && <span className="crit-text">CRIT!</span>}
-        {amount}
-      </div>
-    </Html>
+    <group ref={groupRef} position={position}>
+      <sprite ref={spriteRef}>
+        <spriteMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
+      </sprite>
+    </group>
   );
 }
