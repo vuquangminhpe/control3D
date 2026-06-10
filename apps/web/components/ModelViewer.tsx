@@ -28,6 +28,7 @@ export function ModelViewer({ mode = "inspect", src }: ModelViewerProps) {
   if (mode === "edit") {
     return (
       <EditorViewer
+        interactionMode="orbit"
         mode="translate"
         onMeshSelectionChange={() => undefined}
         onTransformChange={() => undefined}

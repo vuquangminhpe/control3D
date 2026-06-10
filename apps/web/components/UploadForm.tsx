@@ -20,14 +20,14 @@ export function UploadForm({ elementTypes }: UploadFormProps) {
   useEffect(() => {
     return () => {
       if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
+        URL.revokeObjectURL(previewUrl.split("#")[0]);
       }
     };
   }, [previewUrl]);
 
   return (
     <form
-      className="grid form-grid"
+      className="upload-studio-form"
       onSubmit={(event) => {
         event.preventDefault();
         setError(null);
@@ -71,9 +71,9 @@ export function UploadForm({ elementTypes }: UploadFormProps) {
             setPreviewName(file?.name ?? "");
             setPreviewUrl((current) => {
               if (current) {
-                URL.revokeObjectURL(current);
+                URL.revokeObjectURL(current.split("#")[0]);
               }
-              return file ? URL.createObjectURL(file) : null;
+              return file ? `${URL.createObjectURL(file)}#${file.name.toLowerCase()}` : null;
             });
           }}
         />
@@ -130,15 +130,32 @@ export function UploadForm({ elementTypes }: UploadFormProps) {
         </select>
       </label>
 
-      <div className="card subtle full-width">
-        <strong>Selected file:</strong> {previewName || "No file selected"}
-      </div>
-
-      {previewUrl ? (
-        <div className="card full-width viewer-shell compact-viewer">
-          <InspectViewer src={previewUrl} variant="preview" />
+      <section className="upload-preview-panel full-width">
+        <div className="upload-preview-head">
+          <div>
+            <span>Live preview</span>
+            <strong>{previewName || "No file selected"}</strong>
+          </div>
+          <small>{previewName.toLowerCase().endsWith(".glb") || previewName.toLowerCase().endsWith(".gltf") ? "WebGL preview ready" : "Preview supports GLB/GLTF"}</small>
         </div>
-      ) : null}
+        {previewUrl ? (
+          previewName.toLowerCase().endsWith(".glb") || previewName.toLowerCase().endsWith(".gltf") ? (
+            <div className="upload-preview-viewer">
+              <InspectViewer src={previewUrl} variant="preview" />
+            </div>
+          ) : (
+            <div className="upload-preview-empty">
+              <strong>{previewName}</strong>
+              <span>This format can be uploaded, but inline preview is currently available for GLB/GLTF files.</span>
+            </div>
+          )
+        ) : (
+          <div className="upload-preview-empty">
+            <strong>Drop a 3D asset into the form</strong>
+            <span>GLB and GLTF files render here before upload.</span>
+          </div>
+        )}
+      </section>
 
       {error ? <p className="error-text full-width">{error}</p> : null}
       {success ? <p className="success-text full-width">{success}</p> : null}

@@ -95,10 +95,10 @@ export function ModelEditorWorkspace({
   );
 
   return (
-    <main>
-      <div className="page-header">
+    <main className="mixamo-page">
+      <div className="mixamo-object-header">
         <div className="page-title-block">
-          <span className="eyebrow">Editor workspace</span>
+          <span>EDITOR WORKSPACE</span>
           <h1>Edit Model</h1>
           <p>{model.name}</p>
           <div className="meta-row">
@@ -108,10 +108,10 @@ export function ModelEditorWorkspace({
           </div>
         </div>
         <div className="inline-actions">
-          <Link className="button secondary" href={`/models/${model.id}`}>
+          <Link className="mixamo-secondary-action" href={`/models/${model.id}`}>
             Back to detail
           </Link>
-          <a className="button" href={`/api/models/${model.id}/download?asset=delivery`}>
+          <a className="mixamo-primary-action" href={`/api/models/${model.id}/download?asset=delivery`}>
             Download delivery
           </a>
         </div>
@@ -128,6 +128,16 @@ export function ModelEditorWorkspace({
             </div>
           </div>
           <div className="editor-toolbar" role="toolbar" aria-label="Editor controls">
+            {(["orbit", "select", "transform"] as const).map((mode) => (
+              <button
+                className={`mode-button${editor.interactionMode === mode ? " active" : ""}`}
+                key={mode}
+                onClick={() => editor.setInteractionMode(mode)}
+                type="button"
+              >
+                {mode[0].toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
             {(["translate", "rotate", "scale"] as const).map((mode) => (
               <button
                 className={`mode-button${editor.mode === mode ? " active" : ""}`}
@@ -164,22 +174,18 @@ export function ModelEditorWorkspace({
           </div>
         </div>
 
-        <div className="editor-summary-grid">
-          <div className="card subtle">
+        <div className="editor-state-card">
+          <div>
             <span className="stat-label">Selected mesh</span>
-            <div className="stat-value compact">{editor.selectedMeshName ?? "None"}</div>
+            <strong>{editor.selectedMeshName ?? "None"}</strong>
           </div>
-          <div className="card subtle">
-            <span className="stat-label">History state</span>
-            <div className="stat-value compact">
-              {editor.historyIndex + 1}/{editor.history.length}
-            </div>
+          <div>
+            <span className="stat-label">History</span>
+            <strong>{editor.historyIndex + 1}/{editor.history.length}</strong>
           </div>
-          <div className="card subtle">
-            <span className="stat-label">Current mode</span>
-            <div className="stat-value compact">
-              {editor.mode[0].toUpperCase() + editor.mode.slice(1)}
-            </div>
+          <div>
+            <span className="stat-label">Mode</span>
+            <strong>{editor.mode[0].toUpperCase() + editor.mode.slice(1)}</strong>
           </div>
         </div>
       </div>
@@ -188,6 +194,7 @@ export function ModelEditorWorkspace({
         <div className="grid editor-main-column">
           <div className="card viewer-shell">
             <EditorViewer
+              interactionMode={editor.interactionMode}
               mode={editor.mode}
               onMeshSelectionChange={editor.setSelectedMesh}
               onTransformChange={(next, commit) => {

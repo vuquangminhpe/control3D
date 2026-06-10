@@ -1,16 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { RigidBody } from "@react-three/rapier";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { useGameStore } from "@/store/gameStore";
 
-export function Terrain() {
+type TerrainProps = {
+  onReady?: (scene: THREE.Object3D) => void;
+};
+
+export function Terrain({ onReady }: TerrainProps) {
   const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
-  const { scene } = useGLTF(
-    "/uploads/models/d9d70e25-4e3b-4d34-97be-c56ec50e8a26/delivery.glb",
-    dracoPath
-  );
+  const mapModelUrl = useGameStore((state) => state.activeLevel.mapModelUrl);
+  const { scene } = useGLTF(mapModelUrl, dracoPath);
 
   // Optimize material parameters, shadows and ensure static caching
   const optimizedScene = useMemo(() => {
@@ -38,8 +41,18 @@ export function Terrain() {
         }
       }
     });
+    cloned.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(cloned);
+    if (!bounds.isEmpty()) {
+      cloned.position.y -= bounds.min.y;
+      cloned.updateMatrixWorld(true);
+    }
     return cloned;
   }, [scene]);
+
+  useEffect(() => {
+    onReady?.(optimizedScene);
+  }, [onReady, optimizedScene]);
 
   return (
     <RigidBody type="fixed" colliders="trimesh" position={[0, 0, 0]} rotation={[0, 0, 0]}>
@@ -48,8 +61,5 @@ export function Terrain() {
   );
 }
 
-// Preload the terrain GLB
-useGLTF.preload(
-  "/uploads/models/d9d70e25-4e3b-4d34-97be-c56ec50e8a26/delivery.glb",
-  "https://www.gstatic.com/draco/v1/decoders/"
-);
+// Preload the default terrain GLB
+useGLTF.preload("/uploads/models/d9d70e25-4e3b-4d34-97be-c56ec50e8a26/delivery.glb", "https://www.gstatic.com/draco/v1/decoders/");

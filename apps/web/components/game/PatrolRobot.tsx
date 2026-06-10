@@ -22,8 +22,8 @@ export function PatrolRobot() {
   const startDialogue = useGameStore((state) => state.startDialogue);
   
   const [showPrompt, setShowPrompt] = useState<boolean>(false);
-  const patrolStart = useRef<number>(-12);
-  const patrolEnd = useRef<number>(5);
+  const patrolStart = useRef<number>(8);
+  const patrolEnd = useRef<number>(16);
   const direction = useRef<number>(1); // 1 = forward, -1 = backward
   const isInteracting = activeDialogueNpcId === "robot_NPC";
 

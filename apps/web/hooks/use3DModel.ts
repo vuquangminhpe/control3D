@@ -6,7 +6,8 @@ import * as THREE from "three";
 import { cloneMeshMaterial } from "@/lib/3d/materials";
 
 export function isGltfSource(src: string) {
-  return src.endsWith(".glb") || src.endsWith(".gltf");
+  const normalized = src.split("?")[0].split("#").pop() ?? src;
+  return normalized.endsWith(".glb") || normalized.endsWith(".gltf");
 }
 
 function cloneScene(scene: THREE.Object3D, wireframe: boolean) {

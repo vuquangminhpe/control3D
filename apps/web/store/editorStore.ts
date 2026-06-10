@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type {
+  EditorInteractionMode,
   MaterialDraft,
   MeshSelection,
   TransformMode,
@@ -21,6 +22,7 @@ type EditorState = {
   initialTransform: TransformState;
   material: MaterialDraft | null;
   mode: TransformMode;
+  interactionMode: EditorInteractionMode;
   selectedMeshId: string | null;
   selectedMeshName: string | null;
   transform: TransformState;
@@ -29,6 +31,7 @@ type EditorState = {
   resetTransform: () => void;
   setMaterial: (material: MaterialDraft, commit?: boolean) => void;
   setMode: (mode: TransformMode) => void;
+  setInteractionMode: (mode: EditorInteractionMode) => void;
   setSelectedMesh: (selection: MeshSelection | null) => void;
   setTransform: (transform: TransformState, commit?: boolean) => void;
   undo: () => void;
@@ -108,6 +111,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   initialTransform: cloneTransform(defaultTransform),
   material: null,
   mode: "translate",
+  interactionMode: "orbit",
   selectedMeshId: null,
   selectedMeshName: null,
   transform: cloneTransform(defaultTransform),
@@ -127,6 +131,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       initialTransform: clonedTransform,
       material: null,
       mode: "translate",
+      interactionMode: "orbit",
       selectedMeshId: null,
       selectedMeshName: null,
       transform: clonedTransform,
@@ -169,7 +174,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   setMode: (mode) => {
-    set({ mode });
+    set({ mode, interactionMode: "transform" });
+  },
+
+  setInteractionMode: (interactionMode) => {
+    set({ interactionMode });
   },
 
   setSelectedMesh: (selection) => {

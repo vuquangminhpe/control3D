@@ -9,7 +9,7 @@ coverage/
 .env
 .env.*
 !.env.example
-apps/web/data/*.sqlite
+**/apps/web/data
 apps/web/public/uploads/*
 !apps/web/public/uploads/.gitkeep
 !apps/web/public/uploads/models/.gitkeep

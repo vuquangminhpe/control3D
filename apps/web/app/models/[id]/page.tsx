@@ -45,37 +45,37 @@ export default async function ModelDetailPage({ params }: PageProps) {
   const hasSeparateDelivery = originalAssetUrl !== deliveryAssetUrl;
 
   return (
-    <main>
-      <div className="page-header">
+    <main className="mixamo-page">
+      <div className="mixamo-object-header">
         <div>
+          <span>{model.category} · {model.format.toUpperCase()}</span>
           <h1>{model.name}</h1>
           <p>{model.description || "No description available"}</p>
         </div>
-        <div className="inline-actions">
+        <div className="stage-actions">
+          <Link href="/models">Library</Link>
           <a
-            className="button"
             href={`/api/models/${model.id}/download?asset=delivery`}
           >
             Download delivery
           </a>
           <a
-            className="button secondary"
             href={`/api/models/${model.id}/download?asset=original`}
           >
             Download original
           </a>
-          <Link className="button secondary" href={`/models/${model.id}/edit`}>
+          <Link href={`/models/${model.id}/edit`}>
             Edit
           </Link>
         </div>
       </div>
 
-      <div className="grid model-grid">
-        <div className="card viewer-shell">
+      <div className="mixamo-detail-grid">
+        <section className="asset-stage-panel">
           <InspectViewer src={model.fileUrl} />
-        </div>
+        </section>
 
-        <div className="card details-panel">
+        <aside className="mixamo-inspector-panel">
           <h2>Metadata</h2>
           <div className="details-list">
             <div>
@@ -131,10 +131,10 @@ export default async function ModelDetailPage({ params }: PageProps) {
             ) : null}
           </div>
           <div className="inline-actions wrap-actions">
-            <a className="button" href={`/api/models/${model.id}/download?asset=delivery`}>
+            <a className="mixamo-primary-action" href={`/api/models/${model.id}/download?asset=delivery`}>
               {hasSeparateDelivery ? "Download optimized GLB" : "Download current asset"}
             </a>
-            <a className="button secondary" href={`/api/models/${model.id}/download?asset=original`}>
+            <a className="mixamo-secondary-action" href={`/api/models/${model.id}/download?asset=original`}>
               Download original asset
             </a>
           </div>
@@ -180,7 +180,7 @@ export default async function ModelDetailPage({ params }: PageProps) {
           </div>
 
           <DeleteModelButton modelId={model.id} />
-        </div>
+        </aside>
       </div>
     </main>
   );

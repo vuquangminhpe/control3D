@@ -35,7 +35,7 @@ export function DeleteModelButton({ modelId }: { modelId: string }) {
               return;
             }
 
-            router.push("/");
+            router.push("/models");
             router.refresh();
           });
         }}

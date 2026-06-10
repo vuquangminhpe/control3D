@@ -12,9 +12,17 @@ type FloatingDamageProps = {
   isCritical: boolean;
 };
 
+const damageTextureCache = new Map<string, CanvasTexture>();
+
 function createDamageTexture(amount: number, isCritical: boolean) {
   if (typeof document === "undefined") {
     return null;
+  }
+
+  const cacheKey = `${amount}:${isCritical ? 1 : 0}`;
+  const cachedTexture = damageTextureCache.get(cacheKey);
+  if (cachedTexture) {
+    return cachedTexture;
   }
 
   const canvas = document.createElement("canvas");
@@ -48,7 +56,15 @@ function createDamageTexture(amount: number, isCritical: boolean) {
   texture.minFilter = LinearFilter;
   texture.magFilter = LinearFilter;
   texture.needsUpdate = true;
+  damageTextureCache.set(cacheKey, texture);
   return texture;
+}
+
+export function prewarmDamageTextures() {
+  [10, 15, 17, 18, 20, 22, 24, 30, 35, 45, 52].forEach((amount) => {
+    createDamageTexture(amount, false);
+    createDamageTexture(amount, true);
+  });
 }
 
 export function FloatingDamage({ id, amount, position, isCritical }: FloatingDamageProps) {
@@ -60,9 +76,6 @@ export function FloatingDamage({ id, amount, position, isCritical }: FloatingDam
 
   useEffect(() => {
     elapsedRef.current = 0;
-    return () => {
-      texture?.dispose();
-    };
   }, [texture]);
 
   useFrame((_, delta) => {

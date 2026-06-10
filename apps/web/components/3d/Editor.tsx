@@ -25,6 +25,7 @@ import { fitCameraToModel } from "@/lib/3d/camera";
 import { applyMaterialDraft, readMaterialDraft } from "@/lib/3d/materials";
 import {
   type MaterialDraft,
+  type EditorInteractionMode,
   type MeshSelection,
   type TransformMode,
   type TransformState,
@@ -44,6 +45,7 @@ type CanvasGlProp = ComponentProps<typeof Canvas>["gl"];
 
 type EditorViewerProps = {
   mode: TransformMode;
+  interactionMode: EditorInteractionMode;
   onMeshSelectionChange: (selection: MeshSelection | null) => void;
   onTransformChange: (state: TransformState, commit?: boolean) => void;
   position: Vector3Tuple;
@@ -146,6 +148,7 @@ function readTargetTransform(target: THREE.Group) {
 
 function EditorScene({
   mode,
+  interactionMode,
   onMeshSelectionChange,
   onTransformChange,
   position,
@@ -156,6 +159,7 @@ function EditorScene({
   src,
 }: EditorViewerProps) {
   const controlsRef = useRef<OrbitControlsLike | null>(null);
+  const pointerDownRef = useRef<{ x: number; y: number; target: THREE.Mesh } | null>(null);
   const [modelRoot, setModelRoot] = useState<THREE.Object3D | null>(null);
   const [transformTarget, setTransformTarget] =
     useState<THREE.Group | null>(null);
@@ -210,19 +214,39 @@ function EditorScene({
   }, [meshLookup, selectedMaterial, selectedMeshId]);
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (interactionMode !== "select") {
+      return;
+    }
     if (!(event.object instanceof THREE.Mesh)) {
       return;
     }
 
-    event.stopPropagation();
+    pointerDownRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      target: event.object,
+    };
+  };
+
+  const handlePointerUp = (event: ThreeEvent<PointerEvent>) => {
+    if (interactionMode !== "select" || !pointerDownRef.current) {
+      return;
+    }
+
+    const down = pointerDownRef.current;
+    pointerDownRef.current = null;
+    const moved = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    if (moved > 4) {
+      return;
+    }
 
     onMeshSelectionChange({
-      id: event.object.uuid,
-      material: readMaterialDraft(event.object),
+      id: down.target.uuid,
+      material: readMaterialDraft(down.target),
       name:
-        event.object.name
-        || event.object.parent?.name
-        || `Mesh ${event.object.uuid.slice(0, 8)}`,
+        down.target.name
+        || down.target.parent?.name
+        || `Mesh ${down.target.uuid.slice(0, 8)}`,
     });
   };
 
@@ -251,6 +275,7 @@ function EditorScene({
         <Bvh firstHitOnly>
           <ModelLoader
             onMeshPointerDown={handlePointerDown}
+            onMeshPointerUp={handlePointerUp}
             onSceneReady={setModelRoot}
             src={src}
           />
@@ -261,9 +286,10 @@ function EditorScene({
         ref={controlsRef as never}
         dampingFactor={0.08}
         enableDamping
+        enabled={interactionMode !== "transform"}
         makeDefault
       />
-      {transformTarget ? (
+      {transformTarget && interactionMode === "transform" ? (
         <TransformControls
           mode={mode}
           object={transformTarget}

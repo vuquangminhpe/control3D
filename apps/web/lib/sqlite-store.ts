@@ -83,6 +83,35 @@ export type ModelVersionRecord = {
   createdAt: string;
 };
 
+export type EnemyType = "zombie_low" | "zombie_fantasy";
+
+export type ZombieSpawnRecord = {
+  id: string;
+  type: EnemyType;
+  position: [number, number, number];
+};
+
+export type LevelRecord = {
+  id: string;
+  name: string;
+  mapModelUrl: string;
+  playerSpawn: [number, number, number];
+  robotSpawn: [number, number, number];
+  robotStory: string;
+  zombieSpawns: ZombieSpawnRecord[];
+  placedObjects: Array<{
+    id: string;
+    modelId: string;
+    name: string;
+    fileUrl: string;
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }>;
+  createdAt: string;
+  updatedAt: string;
+};
+
 const cwd = process.cwd();
 const appRoot = existsSync(path.join(cwd, "app"))
   ? cwd
@@ -198,7 +227,26 @@ function initializeDb(database: DatabaseSync) {
       created_at TEXT NOT NULL,
       FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS levels (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      map_model_url TEXT NOT NULL,
+      player_spawn_json TEXT NOT NULL,
+      robot_spawn_json TEXT NOT NULL,
+      robot_story TEXT NOT NULL,
+      zombie_spawns_json TEXT NOT NULL,
+      placed_objects_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
+
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN placed_objects_json TEXT NOT NULL DEFAULT '[]';");
+  } catch {
+    // Column already exists.
+  }
 
   const insertSeed = database.prepare(`
     INSERT OR IGNORE INTO element_types (
@@ -304,6 +352,21 @@ function mapVersion(row: Record<string, unknown>): ModelVersionRecord {
     fileUrl: String(row.file_url),
     changeNote: row.change_note ? String(row.change_note) : null,
     createdAt: String(row.created_at),
+  };
+}
+
+function mapLevel(row: Record<string, unknown>): LevelRecord {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    mapModelUrl: String(row.map_model_url),
+    playerSpawn: parseJson(row.player_spawn_json as string | null, [0, 1.5, 5]),
+    robotSpawn: parseJson(row.robot_spawn_json as string | null, [-9, 1.2, 12]),
+    robotStory: String(row.robot_story ?? ""),
+    zombieSpawns: parseJson(row.zombie_spawns_json as string | null, []),
+    placedObjects: parseJson(row.placed_objects_json as string | null, []),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 
@@ -428,6 +491,81 @@ export async function getStats() {
     totalModels: Number(row.totalModels ?? 0),
     totalDownloads: Number(row.totalDownloads ?? 0),
   };
+}
+
+export async function listLevels() {
+  const rows = db
+    .prepare("SELECT * FROM levels ORDER BY updated_at DESC")
+    .all() as Record<string, unknown>[];
+  return rows.map(mapLevel);
+}
+
+export async function getLevelById(id: string) {
+  const row = db.prepare("SELECT * FROM levels WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapLevel(row) : null;
+}
+
+export async function createLevel(input: {
+  id?: string;
+  name: string;
+  mapModelUrl: string;
+  playerSpawn: [number, number, number];
+  robotSpawn: [number, number, number];
+  robotStory: string;
+  zombieSpawns: ZombieSpawnRecord[];
+  placedObjects?: LevelRecord["placedObjects"];
+}) {
+  const now = new Date().toISOString();
+  const existing = input.id ? await getLevelById(input.id) : null;
+  const level: LevelRecord = {
+    id: input.id || randomUUID(),
+    name: input.name.trim(),
+    mapModelUrl: input.mapModelUrl.trim(),
+    playerSpawn: input.playerSpawn,
+    robotSpawn: input.robotSpawn,
+    robotStory: input.robotStory.trim(),
+    zombieSpawns: input.zombieSpawns,
+    placedObjects: input.placedObjects ?? [],
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO levels (
+      id, name, map_model_url, player_spawn_json, robot_spawn_json, robot_story, zombie_spawns_json, placed_objects_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      map_model_url = excluded.map_model_url,
+      player_spawn_json = excluded.player_spawn_json,
+      robot_spawn_json = excluded.robot_spawn_json,
+      robot_story = excluded.robot_story,
+      zombie_spawns_json = excluded.zombie_spawns_json,
+      placed_objects_json = excluded.placed_objects_json,
+      updated_at = excluded.updated_at
+  `,
+  ).run(
+    level.id,
+    level.name,
+    level.mapModelUrl,
+    JSON.stringify(level.playerSpawn),
+    JSON.stringify(level.robotSpawn),
+    level.robotStory,
+    JSON.stringify(level.zombieSpawns),
+    JSON.stringify(level.placedObjects),
+    level.createdAt,
+    level.updatedAt,
+  );
+
+  return level;
+}
+
+export async function deleteLevel(id: string) {
+  const result = db.prepare("DELETE FROM levels WHERE id = ?").run(id);
+  return Number(result.changes ?? 0) > 0;
 }
 
 export async function createElementType(input: {

@@ -13,6 +13,8 @@ export function HUD() {
   const comboCount = useGameStore((state) => state.comboCount);
   const status = useGameStore((state) => state.status);
   const startGame = useGameStore((state) => state.startGame);
+  const selectedWeapon = useGameStore((state) => state.selectedWeapon);
+  const activeLevel = useGameStore((state) => state.activeLevel);
   
   const hpPercent = Math.max((playerHp / playerMaxHp) * 100, 0);
   const xpPercent = Math.max((xp / nextLevelXp) * 100, 0);
@@ -48,6 +50,10 @@ export function HUD() {
           <span>SCORE</span>
           <strong>{score}</strong>
         </div>
+        <div className="hud-score-card">
+          <span>WEAPON</span>
+          <strong>{selectedWeapon.toUpperCase()}</strong>
+        </div>
       </div>
 
       {/* 2. Combo Indicator */}
@@ -65,6 +71,10 @@ export function HUD() {
       {/* 3. Controls Manual (Floating Sidebar) */}
       <div className="controls-sidebar">
         <h4>COMMAND MANUAL</h4>
+        <div className="control-item">
+          <span className="key">MAP</span>
+          <span>{activeLevel.name}</span>
+        </div>
         <div className="control-item">
           <span className="key">W</span>
           <span className="key">A</span>
@@ -98,7 +108,7 @@ export function HUD() {
         </div>
         <div className="control-item">
           <span className="key">E</span>
-          <span>Interact with Robot BOT</span>
+          <span>Talk / Shop</span>
         </div>
       </div>
 

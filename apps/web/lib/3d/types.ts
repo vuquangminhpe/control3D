@@ -13,6 +13,7 @@ export const ENVIRONMENT_PRESETS = [
 
 export type EnvironmentPreset = (typeof ENVIRONMENT_PRESETS)[number];
 export type TransformMode = "translate" | "rotate" | "scale";
+export type EditorInteractionMode = "orbit" | "select" | "transform";
 export type Vector3Tuple = [number, number, number];
 export type TransformState = {
   position: Vector3Tuple;

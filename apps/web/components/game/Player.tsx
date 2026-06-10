@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier";
 import * as THREE from "three";
-import { useGameStore } from "@/store/gameStore";
+import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
 import { PaladinCharacter } from "./PaladinCharacter";
 
 export function Player() {
@@ -17,11 +17,9 @@ export function Player() {
   const playerHp = useGameStore((state) => state.playerHp);
   const updatePlayerPosition = useGameStore((state) => state.updatePlayerPosition);
   const updatePlayerVelocity = useGameStore((state) => state.updatePlayerVelocity);
-  const isAttacking = useGameStore((state) => state.isPlayerAttacking);
   const triggerAttackStart = useGameStore((state) => state.triggerAttackStart);
   const triggerAttackEnd = useGameStore((state) => state.triggerAttackEnd);
   const hitEnemy = useGameStore((state) => state.hitEnemy);
-  const addDamageNumber = useGameStore((state) => state.addDamageNumber);
   const activeDialogueNpcId = useGameStore((state) => state.activeDialogueNpcId);
 
   // Local movement states
@@ -31,6 +29,8 @@ export function Player() {
   const blockActiveRef = useRef<boolean>(false);
   const hasHitThisSwing = useRef<boolean>(false);
   const attackRecoveryTimeoutRef = useRef<number | null>(null);
+  const attackDeadlineRef = useRef<number>(0);
+  const isAttackingRef = useRef<boolean>(false);
   const hitRecoveryTimeoutRef = useRef<number | null>(null);
   const combatProfileRef = useRef<{ damage: number; critChance: number }>({ damage: 15, critChance: 0.2 });
   const groundedContactsRef = useRef(0);
@@ -38,6 +38,13 @@ export function Player() {
   const lastSyncedPositionRef = useRef<[number, number, number]>(initialPlayerPositionRef.current);
   const lastSyncedVelocityRef = useRef<[number, number, number]>([0, 0, 0]);
   const previousHpRef = useRef(playerHp);
+  const playerPositionVecRef = useRef(new THREE.Vector3());
+  const enemyPositionVecRef = useRef(new THREE.Vector3());
+  const toEnemyVecRef = useRef(new THREE.Vector3());
+  const attackQuaternionRef = useRef(new THREE.Quaternion());
+  const cameraForwardRef = useRef(new THREE.Vector3());
+  const cameraRightRef = useRef(new THREE.Vector3());
+  const yAxisRef = useRef(new THREE.Vector3(0, 1, 0));
 
   // Speed configuration
   const speed = 7;
@@ -59,12 +66,34 @@ export function Player() {
 
   const finishAttackAnimation = useCallback(() => {
     clearAttackRecoveryTimeout();
+    attackDeadlineRef.current = 0;
+    isAttackingRef.current = false;
+    hasHitThisSwing.current = false;
     triggerAttackEnd();
     setActionState("idle");
     window.setTimeout(() => {
       setComboStep(0);
     }, 800);
   }, [clearAttackRecoveryTimeout, triggerAttackEnd]);
+
+  const beginAttack = useCallback((
+    action: string,
+    combo: number,
+    profile: { damage: number; critChance: number },
+    recoveryMs: number
+  ) => {
+    clearAttackRecoveryTimeout();
+    hasHitThisSwing.current = false;
+    combatProfileRef.current = profile;
+    attackDeadlineRef.current = window.performance.now() + recoveryMs + 250;
+    isAttackingRef.current = true;
+    setComboStep(combo);
+    setActionState(action);
+    triggerAttackStart(combo);
+    attackRecoveryTimeoutRef.current = window.setTimeout(() => {
+      finishAttackAnimation();
+    }, recoveryMs);
+  }, [clearAttackRecoveryTimeout, finishAttackAnimation, triggerAttackStart]);
 
   const handleJump = useCallback(() => {
     if (!rigidBodyRef.current || jumpActiveRef.current || groundedContactsRef.current <= 0) {
@@ -79,7 +108,7 @@ export function Player() {
   }, []);
 
   useEffect(() => {
-    if (playerHp < previousHpRef.current && playerHp > 0 && !isAttacking && !jumpActiveRef.current) {
+    if (playerHp < previousHpRef.current && playerHp > 0 && !isAttackingRef.current && !jumpActiveRef.current) {
       clearHitRecoveryTimeout();
       setActionState("hit");
       hitRecoveryTimeoutRef.current = window.setTimeout(() => {
@@ -91,17 +120,16 @@ export function Player() {
     }
 
     previousHpRef.current = playerHp;
-  }, [clearHitRecoveryTimeout, isAttacking, playerHp]);
+  }, [clearHitRecoveryTimeout, playerHp]);
 
   // Handle attacks (Combo system)
   const handleAttack = useCallback((mode: "light" | "heavy" | "alt") => {
-    hasHitThisSwing.current = false;
+    if (isAttackingRef.current) return;
+    const selectedWeapon = useGameStore.getState().selectedWeapon;
 
     if (mode === "heavy") {
-      combatProfileRef.current = { damage: 35, critChance: 0.4 };
-      setActionState("kick");
-      triggerAttackStart(3);
-      setComboStep(3);
+      const heavyDamage = selectedWeapon === "greatsword" ? 55 : selectedWeapon === "bow" ? 28 : 35;
+      beginAttack("kick", 3, { damage: heavyDamage, critChance: 0.4 }, 1100);
       return;
     }
 
@@ -115,26 +143,35 @@ export function Player() {
         { action: "attackAlt3", damage: 30, critChance: 0.35, combo: 3 },
       ] as const;
       const selectedAttack = randomAttackPool[Math.floor(Math.random() * randomAttackPool.length)];
-      combatProfileRef.current = { damage: selectedAttack.damage, critChance: selectedAttack.critChance };
-      setComboStep(selectedAttack.combo);
-      setActionState(selectedAttack.action);
-      triggerAttackStart(selectedAttack.combo);
+      const recoveryDelay =
+        selectedAttack.action === "kick" ? 1100 :
+        selectedAttack.action === "attackAlt3" ? 1050 :
+        selectedAttack.action === "attackAlt2" ? 980 :
+        selectedAttack.action === "attackAlt1" ? 900 :
+        selectedAttack.action === "slash" ? 900 :
+        850;
+
+      const weaponBonus = selectedWeapon === "greatsword" ? 14 : selectedWeapon === "bow" ? 6 : 0;
+      beginAttack(
+        selectedAttack.action,
+        selectedAttack.combo,
+        { damage: selectedAttack.damage + weaponBonus, critChance: selectedAttack.critChance },
+        recoveryDelay
+      );
       return;
     }
 
-    combatProfileRef.current = { damage: comboStep === 1 ? 22 : 15, critChance: comboStep === 1 ? 0.24 : 0.2 };
     let nextStep = 1;
+    const lightDamage = selectedWeapon === "greatsword" ? 26 : selectedWeapon === "bow" ? 18 : 15;
+    const slashDamage = selectedWeapon === "greatsword" ? 36 : selectedWeapon === "bow" ? 24 : 22;
     if (comboStep === 1) {
       nextStep = 2;
-      setActionState("slash");
+      beginAttack("slash", nextStep, { damage: slashDamage, critChance: 0.24 }, 900);
     } else {
       nextStep = 1;
-      setActionState("attack");
+      beginAttack("attack", nextStep, { damage: lightDamage, critChance: 0.2 }, 850);
     }
-
-    setComboStep(nextStep);
-    triggerAttackStart(nextStep);
-  }, [comboStep, triggerAttackStart]);
+  }, [beginAttack, comboStep]);
 
   // Track inputs
   useEffect(() => {
@@ -151,13 +188,13 @@ export function Player() {
         blockActiveRef.current = true;
       }
 
-      if (key === "j" && !isAttacking) {
+      if (key === "j" && !isAttackingRef.current) {
         handleAttack("light");
       }
-      if (key === "k" && !isAttacking) {
+      if (key === "k" && !isAttackingRef.current) {
         handleAttack("heavy");
       }
-      if (e.code === "Space" && !isAttacking) {
+      if (e.code === "Space" && !isAttackingRef.current) {
         e.preventDefault();
         handleJump();
       }
@@ -177,7 +214,7 @@ export function Player() {
 
     const handleMouseDown = (e: MouseEvent) => {
       if (playerHp <= 0 || activeDialogueNpcId) return;
-      if (e.button !== 2 || isAttacking) return;
+      if (e.button !== 2 || isAttackingRef.current) return;
       e.preventDefault();
       handleAttack("alt");
     };
@@ -197,7 +234,7 @@ export function Player() {
       window.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, [activeDialogueNpcId, handleAttack, handleJump, isAttacking, playerHp]);
+  }, [activeDialogueNpcId, handleAttack, handleJump, playerHp]);
 
   // Called when animations end playing
   const onAnimationFinished = useCallback((actionName: string) => {
@@ -210,35 +247,6 @@ export function Player() {
   }, [finishAttackAnimation]);
 
   useEffect(() => {
-    clearAttackRecoveryTimeout();
-
-    if (!isAttacking) {
-      return;
-    }
-
-    const recoveryDelay =
-      actionState === "kick" ? 1100 :
-      actionState === "attackAlt3" ? 1050 :
-      actionState === "attackAlt2" ? 980 :
-      actionState === "attackAlt1" ? 900 :
-      actionState === "slash" ? 900 :
-      actionState === "attack" ? 850 :
-      null;
-
-    if (recoveryDelay === null) {
-      return;
-    }
-
-    attackRecoveryTimeoutRef.current = window.setTimeout(() => {
-      finishAttackAnimation();
-    }, recoveryDelay);
-
-    return () => {
-      clearAttackRecoveryTimeout();
-    };
-  }, [actionState, clearAttackRecoveryTimeout, finishAttackAnimation, isAttacking]);
-
-  useEffect(() => {
     return () => {
       clearAttackRecoveryTimeout();
       clearHitRecoveryTimeout();
@@ -246,49 +254,56 @@ export function Player() {
   }, [clearAttackRecoveryTimeout, clearHitRecoveryTimeout]);
 
   // Combat collision check (checks on active frame window)
-  const checkCombatCollisions = (playerPos: THREE.Vector3, playerRot: THREE.Quaternion) => {
+  const checkCombatCollisions = (playerPos: THREE.Vector3) => {
     if (hasHitThisSwing.current) return;
 
-    // We check hit collision around halfway through the attack animations
-    // Let's assume a attack range of 2.2 units and 90-degree front arc cone
-    const attackRange = 2.4;
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(playerRot);
-
+    const selectedWeapon = useGameStore.getState().selectedWeapon;
+    const swordReach =
+      selectedWeapon === "bow" ? 11 :
+      selectedWeapon === "greatsword" ? 3.1 :
+      2.65;
     const enemies = useGameStore.getState().enemies;
+    let closestHit:
+      | {
+          enemyId: string;
+          position: [number, number, number];
+          distance: number;
+        }
+      | null = null;
+
     for (const enemy of enemies) {
       if (enemy.isDead) continue;
 
-      const enemyPos = new THREE.Vector3(...enemy.position);
-      const toEnemy = enemyPos.clone().sub(playerPos);
+      const runtimePos = getEnemyRuntimePosition(enemy.id) ?? enemy.position;
+      const enemyPos = enemyPositionVecRef.current.fromArray(runtimePos);
+      const toEnemy = toEnemyVecRef.current.copy(enemyPos).sub(playerPos);
+      toEnemy.y = 0;
       const distance = toEnemy.length();
+      const targetRadius = enemy.type === "zombie_fantasy" ? 1.35 : 0.75;
 
-      if (distance <= attackRange) {
-        toEnemy.normalize();
-        const angle = forward.angleTo(toEnemy);
-
-        // Hitting within a 75 degree angle in front of character
-        if (angle < Math.PI * 0.45) {
-          hasHitThisSwing.current = true;
-
-          // Damage parameters based on combo steps
-          const { damage, critChance } = combatProfileRef.current;
-          const isCrit = Math.random() < critChance;
-          const finalDamage = isCrit ? Math.floor(damage * 1.5) : damage;
-
-          // Push floating damage number
-          const floatPos: [number, number, number] = [
-            enemy.position[0] + (Math.random() - 0.5) * 0.5,
-            enemy.position[1] + 1.2,
-            enemy.position[2] + (Math.random() - 0.5) * 0.5,
-          ];
-          addDamageNumber(finalDamage, floatPos, isCrit);
-
-          // Apply damage
-          hitEnemy(enemy.id, finalDamage, isCrit);
-          break; // Hit one enemy per swing to balance, or can do multi-hit if we want
-        }
+      if (distance <= swordReach + targetRadius && (!closestHit || distance < closestHit.distance)) {
+        closestHit = {
+          enemyId: enemy.id,
+          position: runtimePos,
+          distance,
+        };
       }
     }
+
+    if (!closestHit) return;
+
+    hasHitThisSwing.current = true;
+
+    const { damage, critChance } = combatProfileRef.current;
+    const isCrit = Math.random() < critChance;
+    const finalDamage = isCrit ? Math.floor(damage * 1.5) : damage;
+
+    const floatPos: [number, number, number] = [
+      closestHit.position[0] + (Math.random() - 0.5) * 0.5,
+      closestHit.position[1] + 1.2,
+      closestHit.position[2] + (Math.random() - 0.5) * 0.5,
+    ];
+    hitEnemy(closestHit.enemyId, finalDamage, isCrit, floatPos);
   };
 
   useFrame((state, delta) => {
@@ -296,7 +311,7 @@ export function Player() {
 
     const body = rigidBodyRef.current;
     const playerPos = body.translation();
-    const playerVec3 = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
+    const playerVec3 = playerPositionVecRef.current.set(playerPos.x, playerPos.y, playerPos.z);
     const currentVel = body.linvel();
     const isGrounded = groundedContactsRef.current > 0 && currentVel.y <= 0.2;
     
@@ -314,17 +329,32 @@ export function Player() {
     // Handle Death
     if (playerHp <= 0) {
       if (actionState !== "death") {
+        finishAttackAnimation();
         setActionState("death");
         body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       }
       return;
     }
 
+    if (activeDialogueNpcId) {
+      if (isAttackingRef.current) {
+        finishAttackAnimation();
+      }
+      if (actionState !== "idle") {
+        setActionState("idle");
+      }
+      body.setLinvel({ x: 0, y: currentVel.y, z: 0 }, true);
+      return;
+    }
+
     // 1. Combat check (if currently in attack animation state)
-    if (isAttacking) {
-      const q = new THREE.Quaternion();
-      playerNodeRef.current.getWorldQuaternion(q);
-      checkCombatCollisions(playerVec3, q);
+    if (isAttackingRef.current) {
+      if (attackDeadlineRef.current > 0 && window.performance.now() > attackDeadlineRef.current) {
+        finishAttackAnimation();
+        return;
+      }
+
+      checkCombatCollisions(playerVec3);
       
       // Stop moving while attacking to add momentum weight
       body.setLinvel({ x: 0, y: currentVel.y, z: 0 }, true);
@@ -360,12 +390,12 @@ export function Player() {
     let targetZ = 0;
 
     if (isKeyboardMoving) {
-      const cameraForward = new THREE.Vector3();
+      const cameraForward = cameraForwardRef.current;
       camera.getWorldDirection(cameraForward);
       cameraForward.y = 0;
       cameraForward.normalize();
 
-      const cameraRight = new THREE.Vector3().crossVectors(cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
+      const cameraRight = cameraRightRef.current.crossVectors(cameraForward, yAxisRef.current).normalize();
       const moveDir = cameraForward.multiplyScalar(moveZ).add(cameraRight.multiplyScalar(moveX)).normalize();
       
       targetX = moveDir.x * speed;
@@ -373,7 +403,7 @@ export function Player() {
       
       // Face the direction of keyboard movement
       const angle = Math.atan2(moveDir.x, moveDir.z);
-      const targetRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+      const targetRotation = attackQuaternionRef.current.setFromAxisAngle(yAxisRef.current, angle);
       playerNodeRef.current.quaternion.slerp(targetRotation, rotationSpeed * delta);
       
       if (!jumpActiveRef.current) {
@@ -417,7 +447,6 @@ export function Player() {
       enabledRotations={[false, false, false]} // Lock character from tipping over
       linearDamping={1}
       type="dynamic"
-      ccd
       canSleep={false}
     >
       <CapsuleCollider args={[0.7, 0.4]} position={[0, 1.1, 0]} />

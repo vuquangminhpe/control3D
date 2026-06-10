@@ -6,7 +6,7 @@ import { useGLTF, useAnimations } from "@react-three/drei";
 import { RigidBody, CapsuleCollider } from "@react-three/rapier";
 import * as THREE from "three";
 import { SkeletonUtils } from "three-stdlib";
-import { useGameStore } from "@/store/gameStore";
+import { deleteEnemyRuntimePosition, setEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
 import { stabilizeClipRootMotion, stripPositionTracks } from "./animationUtils";
 
 type EnemyZombieProps = {
@@ -19,20 +19,32 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
   const initialPositionRef = useRef<[number, number, number]>(
     useGameStore.getState().enemies.find((entry) => entry.id === id)?.position ?? [0, 1.2, 0]
   );
-  const lastSyncedPositionRef = useRef<[number, number, number]>(initialPositionRef.current);
-  const lastPositionSyncTimeRef = useRef(0);
+  const runtimePositionRef = useRef<[number, number, number]>([...initialPositionRef.current]);
+  const currentPosVecRef = useRef(new THREE.Vector3());
+  const playerVecRef = useRef(new THREE.Vector3());
+  const toPlayerRef = useRef(new THREE.Vector3());
+  const freshEnemyVecRef = useRef(new THREE.Vector3());
+  const freshPlayerVecRef = useRef(new THREE.Vector3());
 
   // Zustand state and actions
   const enemyType = useGameStore((state) => state.enemies.find((e) => e.id === id)?.type);
   const enemyHealth = useGameStore((state) => state.enemies.find((e) => e.id === id)?.health ?? 0);
   const enemyMaxHealth = useGameStore((state) => state.enemies.find((e) => e.id === id)?.maxHealth ?? 1);
   const enemyIsDead = useGameStore((state) => state.enemies.find((e) => e.id === id)?.isDead ?? true);
-  const updateEnemyPosition = useGameStore((state) => state.updateEnemyPosition);
   const updateEnemyState = useGameStore((state) => state.updateEnemyState);
 
   const [animState, setAnimState] = useState<string>("idle");
+  const animStateRef = useRef<string>("idle");
   const lastAttackTime = useRef<number>(0);
   const isCurrentlyAttacking = useRef<boolean>(false);
+  const impactTimeoutRef = useRef<number | null>(null);
+  const attackUnlockTimeoutRef = useRef<number | null>(null);
+
+  const setEnemyAnimState = (nextState: string) => {
+    if (animStateRef.current === nextState) return;
+    animStateRef.current = nextState;
+    setAnimState(nextState);
+  };
 
   if (!enemyType) return null;
 
@@ -74,6 +86,41 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
   // 2. Setup Animations
   const { actions, mixer } = useAnimations(stabilizedAnimations, clonedScene);
 
+  useEffect(() => {
+    setEnemyRuntimePosition(id, runtimePositionRef.current);
+
+    return () => {
+      deleteEnemyRuntimePosition(id);
+      if (impactTimeoutRef.current !== null) {
+        window.clearTimeout(impactTimeoutRef.current);
+        impactTimeoutRef.current = null;
+      }
+      if (attackUnlockTimeoutRef.current !== null) {
+        window.clearTimeout(attackUnlockTimeoutRef.current);
+        attackUnlockTimeoutRef.current = null;
+      }
+    };
+  }, [id]);
+
+  useEffect(() => {
+    if (!enemyIsDead) return;
+
+    if (impactTimeoutRef.current !== null) {
+      window.clearTimeout(impactTimeoutRef.current);
+      impactTimeoutRef.current = null;
+    }
+    if (attackUnlockTimeoutRef.current !== null) {
+      window.clearTimeout(attackUnlockTimeoutRef.current);
+      attackUnlockTimeoutRef.current = null;
+    }
+
+    isCurrentlyAttacking.current = false;
+    setEnemyAnimState("death");
+    clonedScene.position.set(0, isFantasy ? -0.25 : -0.35, 0);
+    rigidBodyRef.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    rigidBodyRef.current?.setAngvel?.({ x: 0, y: 0, z: 0 }, true);
+  }, [clonedScene, enemyIsDead, isFantasy]);
+
   // Animation mapping helper
   const animationMap = useMemo(() => {
     if (isFantasy) {
@@ -104,6 +151,11 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
     if (action) {
       action.reset();
+      action.time = animState === "death" && !isFantasy ? 4.1 : 0;
+      action.timeScale =
+        animState === "death" && !isFantasy ? 1.8 :
+        animState === "attack" && !isFantasy ? 4.5 :
+        1;
       
       if (animState === "attack" || animState === "death") {
         action.setLoop(THREE.LoopOnce, 1);
@@ -112,12 +164,17 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
         action.setLoop(THREE.LoopRepeat, Infinity);
       }
 
+      if (animState === "death") {
+        Object.values(actions).forEach((act) => {
+          if (act && act !== action) act.stop();
+        });
+      }
       action.play();
       
       // Stop old actions
       Object.entries(actions).forEach(([name, act]) => {
         if (name !== mappedClip && act) {
-          act.fadeOut(0.2);
+          act.fadeOut(animState === "death" ? 0.05 : 0.2);
         }
       });
     }
@@ -131,7 +188,7 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
       const clipName = e.action.getClip().name;
       if (clipName === animationMap.attack) {
         isCurrentlyAttacking.current = false;
-        setAnimState("idle");
+        setEnemyAnimState("idle");
       }
     };
 
@@ -147,7 +204,7 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
     if (!rigidBodyRef.current || !groupRef.current || enemyIsDead) {
       if (enemyIsDead && animState !== "death") {
-        setAnimState("death");
+        setEnemyAnimState("death");
         rigidBodyRef.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
       }
       return;
@@ -157,32 +214,20 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
 
     const body = rigidBodyRef.current;
     const pos = body.translation();
-    const currentPosVec = new THREE.Vector3(pos.x, pos.y, pos.z);
-
-    const nextPosition: [number, number, number] = [pos.x, pos.y, pos.z];
-    const lastPosition = lastSyncedPositionRef.current;
-    if (
-      state.clock.elapsedTime - lastPositionSyncTimeRef.current > 0.1 &&
-      (
-        Math.abs(nextPosition[0] - lastPosition[0]) > 0.05 ||
-        Math.abs(nextPosition[1] - lastPosition[1]) > 0.05 ||
-        Math.abs(nextPosition[2] - lastPosition[2]) > 0.05
-      )
-    ) {
-      lastSyncedPositionRef.current = nextPosition;
-      lastPositionSyncTimeRef.current = state.clock.elapsedTime;
-      updateEnemyPosition(id, nextPosition);
-    }
+    const currentPosVec = currentPosVecRef.current.set(pos.x, pos.y, pos.z);
+    runtimePositionRef.current[0] = pos.x;
+    runtimePositionRef.current[1] = pos.y;
+    runtimePositionRef.current[2] = pos.z;
 
     // Dead player -> idle
     if (playerHp <= 0) {
-      if (animState !== "idle") setAnimState("idle");
+      setEnemyAnimState("idle");
       body.setLinvel({ x: 0, y: body.linvel().y, z: 0 }, true);
       return;
     }
 
-    const playerVec = new THREE.Vector3(...playerPosition);
-    const toPlayer = playerVec.clone().sub(currentPosVec);
+    const playerVec = playerVecRef.current.fromArray(playerPosition);
+    const toPlayer = toPlayerRef.current.copy(playerVec).sub(currentPosVec);
     toPlayer.y = 0; // ignores height differences for distance checks
     const distance = toPlayer.length();
 
@@ -195,7 +240,7 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
     // Wait, the damage animation is played when hit
     if (enemyHealth <= 0) {
       updateEnemyState(id, { isDead: true });
-      setAnimState("death");
+      setEnemyAnimState("death");
       return;
     }
 
@@ -211,10 +256,21 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
       if (now - lastAttackTime.current > attackCooldown && !isCurrentlyAttacking.current) {
         isCurrentlyAttacking.current = true;
         lastAttackTime.current = now;
-        setAnimState("attack");
+        setEnemyAnimState("attack");
+        if (attackUnlockTimeoutRef.current !== null) {
+          window.clearTimeout(attackUnlockTimeoutRef.current);
+        }
+        attackUnlockTimeoutRef.current = window.setTimeout(() => {
+          attackUnlockTimeoutRef.current = null;
+          isCurrentlyAttacking.current = false;
+          if (!useGameStore.getState().enemies.find((entry) => entry.id === id)?.isDead) {
+            setEnemyAnimState("idle");
+          }
+        }, isFantasy ? 900 : 850);
 
-        // Deal damage to player on impact frame (simulate with half cooldown timeout)
-        setTimeout(() => {
+        // Apply damage near the visible impact frame, not half a second after contact.
+        impactTimeoutRef.current = window.setTimeout(() => {
+          impactTimeoutRef.current = null;
           const gameState = useGameStore.getState();
           const latestEnemy = gameState.enemies.find((entry) => entry.id === id);
           if (!latestEnemy || latestEnemy.isDead || gameState.playerHp <= 0) return;
@@ -222,8 +278,8 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
           // Re-evaluate distance
           const newPos = rigidBodyRef.current?.translation();
           if (!newPos) return;
-          const freshEnemyPos = new THREE.Vector3(newPos.x, newPos.y, newPos.z);
-          const freshPlayerPos = new THREE.Vector3(...gameState.playerPosition);
+          const freshEnemyPos = freshEnemyVecRef.current.set(newPos.x, newPos.y, newPos.z);
+          const freshPlayerPos = freshPlayerVecRef.current.fromArray(gameState.playerPosition);
           const d = freshEnemyPos.distanceTo(freshPlayerPos);
 
           if (d <= attackRange + 0.5) {
@@ -234,7 +290,7 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
             
             gameState.damagePlayer(finalDamage);
           }
-        }, 500);
+        }, isFantasy ? 220 : 160);
       }
     } else if (distance < chaseRange && !isCurrentlyAttacking.current) {
       // Chase player
@@ -248,12 +304,12 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
       groupRef.current.rotation.y = angle;
 
       const runAnim = isFantasy ? "run" : "walk";
-      if (animState !== runAnim) setAnimState(runAnim);
+      setEnemyAnimState(runAnim);
     } else {
       // Idle / Stop chasing
       if (!isCurrentlyAttacking.current) {
         body.setLinvel({ x: 0, y: body.linvel().y, z: 0 }, true);
-        if (animState !== "idle") setAnimState("idle");
+        setEnemyAnimState("idle");
       }
     }
   });
@@ -264,12 +320,11 @@ export function EnemyZombie({ id }: EnemyZombieProps) {
       colliders={false}
       position={initialPositionRef.current}
       enabledRotations={[false, false, false]}
-      type="dynamic"
+      type={enemyIsDead ? "fixed" : "dynamic"}
       linearDamping={1}
-      ccd
-      canSleep={false}
+      canSleep
     >
-      <CapsuleCollider args={[0.7, 0.4]} position={[0, 1.1, 0]} />
+      {!enemyIsDead && <CapsuleCollider args={[0.7, 0.4]} position={[0, 1.1, 0]} />}
       
       {/* 3D Billboard HP Bar above head */}
       {!enemyIsDead && (
