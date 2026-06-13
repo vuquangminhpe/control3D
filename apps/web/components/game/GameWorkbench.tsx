@@ -18,7 +18,10 @@ import {
   TransformControls,
 } from "@react-three/drei";
 import * as THREE from "three";
-import { ModelLoader, getRenderableBounds } from "@/components/3d/ModelLoader";
+import {
+  ModelLoader,
+  getRenderableBounds,
+} from "@/components/3d/ModelLoader";
 import { log3DDebug } from "@/lib/3d/debug";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 import { StoryGraphPanel } from "./StoryGraphPanel";
@@ -50,8 +53,21 @@ type AssetLibraryItem = {
   name: string;
   fileUrl: string;
   category: string;
+  customProps?: Record<string, unknown> | null;
   format?: string;
   thumbnailUrl?: string | null;
+};
+
+type CharacterActionLink = {
+  id: string;
+  animationAssetId: string;
+  actionId: string;
+  name: string;
+  fileUrl: string;
+  sourceFormat: string;
+  enabled: boolean;
+  trigger: "none" | "attack" | "talk" | "move" | "custom" | "crouch" | "jump";
+  keyBinding: string | null;
 };
 
 const DEFAULT_MAP_URL = "";
@@ -89,7 +105,6 @@ type MapRelativeScale = {
   characterHeight: number;
   objectMaxSize: number;
 };
-
 const DEFAULT_MAP_RELATIVE_SCALE: MapRelativeScale = {
   gameplayRatio: 1,
   characterHeight: MAP_CHARACTER_HEIGHT,
@@ -105,6 +120,110 @@ function parseVector(value: string): [number, number, number] | null {
   if (parts.length !== 3 || parts.some((entry) => !Number.isFinite(entry)))
     return null;
   return [parts[0], parts[1], parts[2]];
+}
+
+function getSmartActionBinding(name: string): { trigger: CharacterActionLink["trigger"]; keyBinding: string | null } | null {
+  const lowercase = name.toLowerCase();
+
+  // Crouch matches
+  if (
+    lowercase.includes("crouch") ||
+    lowercase.includes("cround") ||
+    lowercase.includes("crch") ||
+    lowercase.includes("crd")
+  ) {
+    return { trigger: "crouch", keyBinding: "Space" };
+  }
+
+  // Jump matches
+  if (
+    lowercase.includes("jump") ||
+    lowercase.includes("jmp") ||
+    lowercase.includes("leap")
+  ) {
+    return { trigger: "jump", keyBinding: "Space" };
+  }
+
+  // Attack/combo matches
+  if (
+    lowercase.includes("attack") ||
+    lowercase.includes("slash") ||
+    lowercase.includes("kick") ||
+    lowercase.includes("punch") ||
+    lowercase.includes("fight") ||
+    lowercase.includes("shoot") ||
+    lowercase.includes("hit") ||
+    lowercase.includes("combo") ||
+    lowercase.includes("light") ||
+    lowercase.includes("heavy") ||
+    lowercase.includes("alt")
+  ) {
+    let key: string | null = "J";
+    if (lowercase.includes("heavy") || lowercase.includes("slash") || lowercase.includes("combo")) {
+      key = "K";
+    } else if (lowercase.includes("alt") || lowercase.includes("shoot")) {
+      key = "RMB";
+    }
+    return { trigger: "attack", keyBinding: key };
+  }
+
+  // Move and Idle matches
+  if (
+    lowercase.includes("walk") ||
+    lowercase.includes("run") ||
+    lowercase.includes("sprint") ||
+    lowercase.includes("move") ||
+    lowercase.includes("go") ||
+    lowercase.includes("idle")
+  ) {
+    return { trigger: "move", keyBinding: "W+A+S+D" };
+  }
+
+  // Talk matches
+  if (
+    lowercase.includes("talk") ||
+    lowercase.includes("speak") ||
+    lowercase.includes("dialogue") ||
+    lowercase.includes("bark") ||
+    lowercase.includes("chat") ||
+    lowercase.includes("say")
+  ) {
+    return { trigger: "talk", keyBinding: "E" };
+  }
+
+  return null;
+}
+
+function getCharacterActionsFromAsset(asset: AssetLibraryItem | null | undefined) {
+  const manifest = asset?.customProps?.characterAnimation;
+  if (!manifest || typeof manifest !== "object" || !("actions" in manifest)) {
+    return [] as CharacterActionLink[];
+  }
+  const actions = (manifest as { actions?: unknown }).actions;
+  if (!Array.isArray(actions)) return [] as CharacterActionLink[];
+  return actions.filter((action): action is CharacterActionLink => (
+    Boolean(action && typeof action === "object" && "id" in action && "name" in action)
+  ));
+}
+
+function writeCharacterActionsToCustomProps(
+  customProps: AssetLibraryItem["customProps"],
+  actions: CharacterActionLink[],
+) {
+  const currentManifest =
+    customProps?.characterAnimation && typeof customProps.characterAnimation === "object"
+      ? customProps.characterAnimation as Record<string, unknown>
+      : {};
+  return {
+    ...(customProps ?? {}),
+    characterAnimation: {
+      ...currentManifest,
+      actions,
+      mode: "external_actions",
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    },
+  };
 }
 
 function transformToInputs(transform: WeaponTransform) {
@@ -189,6 +308,334 @@ function normalizePlacedObjects(objects: PlacedObject[]) {
   });
 }
 
+function KeyBindingInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (val: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [localValue, setLocalValue] = useState<string | null>(value);
+  const keysPressed = useRef<Set<string>>(new Set());
+
+  // Keep local value in sync with value prop when not recording
+  useEffect(() => {
+    if (!recording) {
+      setLocalValue(value);
+    }
+  }, [value, recording]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    let keyName = e.key;
+    if (e.code === "Space") {
+      keyName = "Space";
+    }
+
+    if (keyName === "Control") keyName = "Ctrl";
+    if (keyName === "Escape") {
+      setLocalValue(null);
+      onChange(null);
+      setRecording(false);
+      keysPressed.current.clear();
+      return;
+    }
+
+    if (keyName.length === 1) {
+      keyName = keyName.toUpperCase();
+    }
+
+    keysPressed.current.add(keyName);
+
+    const keysArray = Array.from(keysPressed.current);
+    keysArray.sort((a, b) => {
+      const modifiers = ["Ctrl", "Shift", "Alt"];
+      const aIdx = modifiers.indexOf(a);
+      const bIdx = modifiers.indexOf(b);
+      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+      if (aIdx !== -1) return -1;
+      if (bIdx !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    setLocalValue(keysArray.join("+"));
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const hasOnlyModifiers = Array.from(keysPressed.current).every((k) =>
+      ["Ctrl", "Shift", "Alt"].includes(k),
+    );
+    if (!hasOnlyModifiers && keysPressed.current.size > 0) {
+      const finalVal = localValue;
+      onChange(finalVal);
+      setRecording(false);
+      keysPressed.current.clear();
+    }
+  };
+
+  const handleBlur = () => {
+    if (recording) {
+      onChange(localValue);
+      setRecording(false);
+      keysPressed.current.clear();
+    }
+  };
+
+  return (
+    <div style={{ position: "relative", width: "72px" }}>
+      <input
+        type="text"
+        readOnly
+        disabled={disabled}
+        value={recording ? "Press..." : (localValue || "No key")}
+        onKeyDown={handleKeyDown}
+        onKeyUp={handleKeyUp}
+        onFocus={() => {
+          setRecording(true);
+          keysPressed.current.clear();
+        }}
+        onBlur={handleBlur}
+        style={{
+          width: "100%",
+          height: "28px",
+          border: "1px solid rgba(255, 255, 255, 0.1)",
+          borderRadius: "7px",
+          background: recording
+            ? "rgba(0, 255, 196, 0.15)"
+            : "rgba(255, 255, 255, 0.055)",
+          color: recording ? "#00ffc4" : "#fff",
+          fontSize: "10px",
+          fontWeight: "800",
+          textAlign: "center",
+          cursor: "pointer",
+          outline: "none",
+        }}
+        title="Click to record keys. Press Escape to clear."
+      />
+      {value && !recording && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange(null);
+          }}
+          style={{
+            position: "absolute",
+            right: "4px",
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: "none",
+            border: "none",
+            color: "#f87171",
+            cursor: "pointer",
+            fontSize: "9px",
+            padding: "2px",
+          }}
+          title="Clear binding"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ManualActionConfigPanel({
+  actions,
+  activeActionId,
+  onTriggerAction,
+}: {
+  actions: CharacterActionLink[];
+  activeActionId: string | null;
+  onTriggerAction: (actionId: string) => void;
+}) {
+  const enabledActions = actions.filter((a) => a.enabled);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "24px",
+        top: "140px",
+        width: "260px",
+        background: "rgba(8, 12, 28, 0.75)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid rgba(255, 255, 255, 0.12)",
+        borderRadius: "12px",
+        padding: "14px",
+        boxShadow: "0 10px 30px rgba(0, 0, 0, 0.4)",
+        zIndex: 20,
+        color: "#fff",
+        pointerEvents: "auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          borderBottom: "1px solid rgba(255,255,255,0.1)",
+          paddingBottom: "6px",
+        }}
+      >
+        <span
+          style={{
+            fontSize: "11px",
+            fontWeight: "bold",
+            color: "#00ffc4",
+            letterSpacing: "1px",
+          }}
+        >
+          MANUAL ACTION CONFIG
+        </span>
+        <span
+          style={{
+            fontSize: "9px",
+            background: "rgba(0,255,196,0.15)",
+            color: "#00ffc4",
+            padding: "2px 6px",
+            borderRadius: "10px",
+            fontWeight: "bold",
+          }}
+        >
+          Active
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+          maxHeight: "250px",
+          overflowY: "auto",
+        }}
+      >
+        {enabledActions.map((action) => {
+          const isActive = activeActionId === action.id;
+          return (
+            <div
+              key={action.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: isActive
+                  ? "rgba(0, 255, 196, 0.12)"
+                  : "rgba(255, 255, 255, 0.04)",
+                border: isActive
+                  ? "1px solid #00ffc4"
+                  : "1px solid rgba(255,255,255,0.06)",
+                padding: "8px 10px",
+                borderRadius: "8px",
+                transition: "all 0.2s ease",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2px",
+                  minWidth: 0,
+                }}
+              >
+                <span
+                  title={action.name}
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: "bold",
+                    color: isActive ? "#00ffc4" : "#f3f4f6",
+                    textOverflow: "ellipsis",
+                    overflow: "hidden",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {action.name}
+                </span>
+                <span style={{ fontSize: "8px", color: "#9ca3af" }}>
+                  Trigger: {action.trigger}{" "}
+                  {action.keyBinding ? `| Key: ${action.keyBinding}` : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onTriggerAction(action.id)}
+                style={{
+                  background: isActive ? "#00ffc4" : "rgba(255,255,255,0.08)",
+                  border: "none",
+                  color: isActive ? "#000" : "#fff",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                  fontSize: "9px",
+                  fontWeight: "bold",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                }}
+              >
+                {isActive ? "RUNNING" : "TRIGGER"}
+              </button>
+            </div>
+          );
+        })}
+        {enabledActions.length === 0 && (
+          <div
+            style={{
+              fontSize: "10px",
+              color: "#9ca3af",
+              fontStyle: "italic",
+              textAlign: "center",
+              padding: "10px 0",
+            }}
+          >
+            No enabled actions configured.
+          </div>
+        )}
+      </div>
+
+      {activeActionId && (
+        <div
+          style={{
+            marginTop: "4px",
+            background: "rgba(0, 255, 196, 0.1)",
+            border: "1px solid rgba(0, 255, 196, 0.2)",
+            borderRadius: "6px",
+            padding: "6px 10px",
+            fontSize: "10px",
+            color: "#00ffc4",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: "bold",
+          }}
+        >
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              background: "#00ffc4",
+              borderRadius: "50%",
+              display: "inline-block",
+              boxShadow: "0 0 8px #00ffc4",
+            }}
+          />
+          Running: {actions.find((a) => a.id === activeActionId)?.name}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MarkerLabel({ children }: { children: string }) {
   return (
     <Html center distanceFactor={12} position={[0, 1.55, 0]}>
@@ -253,6 +700,30 @@ function BuilderModelViewer({
   );
 }
 
+function BuilderAssetSummary({
+  asset,
+  selected,
+}: {
+  asset: AssetLibraryItem;
+  selected?: boolean;
+}) {
+  return (
+    <span className={`builder-asset-summary${selected ? " active" : ""}`}>
+      <strong>{asset.name}</strong>
+      <small>{asset.format?.toUpperCase() ?? asset.category}</small>
+    </span>
+  );
+}
+
+function BuilderPlacedSummary({ object }: { object: PlacedObject }) {
+  return (
+    <span className="builder-asset-summary">
+      <strong>{object.name}</strong>
+      <small>{object.scale[0].toFixed(2)}x</small>
+    </span>
+  );
+}
+
 function groundMarkerPosition(
   position: [number, number, number],
   offset: number,
@@ -301,6 +772,32 @@ function getObjectBounds(object: THREE.Object3D | null) {
   object.updateMatrixWorld(true);
   const bounds = new THREE.Box3().setFromObject(object);
   return bounds.isEmpty() ? null : bounds;
+}
+
+function getTerrainHitNormalY(hit: THREE.Intersection) {
+  if (!hit.face) return 1;
+  const normal = hit.face.normal.clone();
+  normal.transformDirection(hit.object.matrixWorld);
+  return normal.y;
+}
+
+function pickTerrainSurfaceHit(
+  hits: THREE.Intersection[],
+  preferredY: number,
+) {
+  const surfaceHits = hits.filter(
+    (hit) =>
+      hit.object.userData.isTerrainSurface &&
+      !hit.object.userData.ignoreBuilderRaycast,
+  );
+  const upwardHits = surfaceHits.filter((hit) => getTerrainHitNormalY(hit) > 0.12);
+  const candidates = upwardHits.length ? upwardHits : surfaceHits;
+  return candidates.sort((a, b) => {
+    const aDelta = Math.abs(a.point.y - preferredY);
+    const bDelta = Math.abs(b.point.y - preferredY);
+    if (Math.abs(aDelta - bDelta) > 0.001) return aDelta - bDelta;
+    return b.point.y - a.point.y;
+  })[0] ?? null;
 }
 
 function sameMapRelativeScale(a: MapRelativeScale, b: MapRelativeScale) {
@@ -463,16 +960,19 @@ function LevelBuilderViewport({
   assetLibrary,
   draft,
   selectedAssetId,
+  setAssetLibrary,
   setDraft,
   setSelectedAssetId,
 }: {
   assetLibrary: AssetLibraryItem[];
   draft: EditableLevelDraft;
   selectedAssetId: string;
+  setAssetLibrary: Dispatch<SetStateAction<AssetLibraryItem[]>>;
   setDraft: Dispatch<SetStateAction<EditableLevelDraft>>;
   setSelectedAssetId: Dispatch<SetStateAction<string>>;
 }) {
   const [placementTool, setPlacementTool] = useState<PlacementTool>("player");
+  const [savingActionId, setSavingActionId] = useState<string | null>(null);
   log3DDebug(
     "builder-viewport-render",
     "LevelBuilderViewport render",
@@ -507,6 +1007,10 @@ function LevelBuilderViewport({
     (asset) => asset.category === "character",
   );
   const selectedPlayerCharacter = draft.playerCharacter;
+  const selectedPlayerAsset = selectedPlayerCharacter
+    ? assetLibrary.find((asset) => asset.id === selectedPlayerCharacter.modelId)
+    : null;
+  const selectedPlayerActions = getCharacterActionsFromAsset(selectedPlayerAsset);
 
   const setPlayerCharacter = (assetId: string) => {
     const asset = characterAssets.find((entry) => entry.id === assetId);
@@ -523,6 +1027,88 @@ function LevelBuilderViewport({
     }));
   };
 
+  const updateCharacterActionBinding = async (
+    actionId: string,
+    updates: Partial<Pick<CharacterActionLink, "enabled" | "trigger" | "keyBinding">>,
+  ) => {
+    if (!selectedPlayerAsset) return;
+    const nextActions = selectedPlayerActions.map((action) =>
+      action.id === actionId ? { ...action, ...updates } : action,
+    );
+    const customProps = writeCharacterActionsToCustomProps(
+      selectedPlayerAsset.customProps,
+      nextActions,
+    );
+    setSavingActionId(actionId);
+    setAssetLibrary((current) =>
+      current.map((asset) =>
+        asset.id === selectedPlayerAsset.id ? { ...asset, customProps } : asset,
+      ),
+    );
+    try {
+      await fetch(`/api/models/${selectedPlayerAsset.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customProps,
+          hasAnimations: nextActions.some((action) => action.enabled),
+        }),
+      });
+    } finally {
+      setSavingActionId(null);
+    }
+  };
+
+  const autoMatchActions = async () => {
+    if (!selectedPlayerAsset || !selectedPlayerActions.length) return;
+    let modified = false;
+    const nextActions = selectedPlayerActions.map((action) => {
+      const match = getSmartActionBinding(action.name);
+      if (match && action.trigger === "none" && !action.keyBinding) {
+        modified = true;
+        return {
+          ...action,
+          trigger: match.trigger,
+          keyBinding: match.keyBinding,
+        };
+      }
+      return action;
+    });
+
+    if (!modified) return;
+
+    const customProps = writeCharacterActionsToCustomProps(
+      selectedPlayerAsset.customProps,
+      nextActions,
+    );
+    setAssetLibrary((current) =>
+      current.map((asset) =>
+        asset.id === selectedPlayerAsset.id ? { ...asset, customProps } : asset,
+      ),
+    );
+    try {
+      await fetch(`/api/models/${selectedPlayerAsset.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customProps,
+          hasAnimations: nextActions.some((action) => action.enabled),
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to auto-bind actions:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedPlayerAsset) return;
+    const actions = getCharacterActionsFromAsset(selectedPlayerAsset);
+    const needsAutoMatch = actions.length > 0 && actions.every((a) => a.trigger === "none" && !a.keyBinding);
+    if (needsAutoMatch) {
+      void autoMatchActions();
+    }
+  }, [selectedPlayerAsset?.id]);
+
   useEffect(() => {
     if (!selectedAssetId && assetLibrary[0]) {
       setSelectedAssetId(assetLibrary[0].id);
@@ -533,16 +1119,32 @@ function LevelBuilderViewport({
     const terrain = terrainObjectRef.current;
     if (!terrain) return fallbackY;
     terrain.updateMatrixWorld(true);
+    const bounds = getObjectBounds(terrain);
+    const rayStartY = bounds
+      ? bounds.max.y + Math.max(bounds.getSize(new THREE.Vector3()).y, 20)
+      : 1000;
     const raycaster = terrainRaycasterRef.current;
-    raycaster.set(new THREE.Vector3(x, 1000, z), new THREE.Vector3(0, -1, 0));
-    const hits = raycaster
-      .intersectObject(terrain, true)
-      .filter(
-        (hit) =>
-          hit.object.userData.isTerrainSurface &&
-          !hit.object.userData.ignoreBuilderRaycast,
-      );
-    return hits[0]?.point.y ?? fallbackY;
+    raycaster.set(
+      new THREE.Vector3(x, rayStartY, z),
+      new THREE.Vector3(0, -1, 0),
+    );
+    const hit = pickTerrainSurfaceHit(
+      raycaster.intersectObject(terrain, true),
+      fallbackY,
+    );
+    log3DDebug(
+      `builder-terrain-y:${x.toFixed(2)}:${z.toFixed(2)}:${fallbackY.toFixed(2)}`,
+      "Builder terrain surface sample",
+      {
+        fallbackY: Number(fallbackY.toFixed(4)),
+        hitY: hit ? Number(hit.point.y.toFixed(4)) : null,
+        normalY: hit ? Number(getTerrainHitNormalY(hit).toFixed(4)) : null,
+        objectName: hit?.object.name ?? null,
+        rayStartY: Number(rayStartY.toFixed(4)),
+      },
+      { intervalMs: 750 },
+    );
+    return hit?.point.y ?? fallbackY;
   };
 
   const getTerrainYAt = (
@@ -552,16 +1154,20 @@ function LevelBuilderViewport({
     fallbackY = 0,
   ) => {
     terrain.updateMatrixWorld(true);
+    const bounds = getObjectBounds(terrain);
+    const rayStartY = bounds
+      ? bounds.max.y + Math.max(bounds.getSize(new THREE.Vector3()).y, 20)
+      : 1000;
     const raycaster = terrainRaycasterRef.current;
-    raycaster.set(new THREE.Vector3(x, 1000, z), new THREE.Vector3(0, -1, 0));
-    const hits = raycaster
-      .intersectObject(terrain, true)
-      .filter(
-        (hit) =>
-          hit.object.userData.isTerrainSurface &&
-          !hit.object.userData.ignoreBuilderRaycast,
-      );
-    return hits[0]?.point.y ?? fallbackY;
+    raycaster.set(
+      new THREE.Vector3(x, rayStartY, z),
+      new THREE.Vector3(0, -1, 0),
+    );
+    const hit = pickTerrainSurfaceHit(
+      raycaster.intersectObject(terrain, true),
+      fallbackY,
+    );
+    return hit?.point.y ?? fallbackY;
   };
 
   const reseedSpawnForMap = (scene: THREE.Object3D) => {
@@ -572,7 +1178,7 @@ function LevelBuilderViewport({
     const playerX = Number(center.x.toFixed(2));
     const playerZ = Number(center.z.toFixed(2));
     const playerGround = getTerrainYAt(scene, playerX, playerZ, center.y);
-    const mapScale = scene.scale.x;
+    const mapScale = mapRelativeScale.gameplayRatio;
     setDraft((current) => ({
       ...current,
       playerSpawn: formatVector([
@@ -670,7 +1276,7 @@ function LevelBuilderViewport({
 
   const snapDraftToTerrain = () => {
     if (!terrainObjectRef.current) return;
-    const mapScale = terrainObjectRef.current.scale.x;
+    const mapScale = currentMapScale;
     setDraft((current) => {
       const currentPlayerSpawn = parseVector(current.playerSpawn) ?? [
         0,
@@ -730,13 +1336,10 @@ function LevelBuilderViewport({
                 onClick={() => setPlayerCharacter(asset.id)}
                 type="button"
               >
-                <BuilderModelViewer
-                  compact
-                  fitHeight={0.95}
-                  interactive={false}
-                  src={asset.fileUrl}
+                <BuilderAssetSummary
+                  asset={asset}
+                  selected={selectedPlayerCharacter?.modelId === asset.id}
                 />
-                <span>{asset.name}</span>
               </button>
             ))}
           </div>
@@ -768,18 +1371,10 @@ function LevelBuilderViewport({
                     onClick={() => setSelectedAssetId(asset.id)}
                     type="button"
                   >
-                    <BuilderModelViewer
-                      compact
-                      fitMaxSize={0.95}
-                      interactive={false}
-                      src={asset.fileUrl}
+                    <BuilderAssetSummary
+                      asset={asset}
+                      selected={selectedAssetId === asset.id}
                     />
-                    <span>
-                      <strong>{asset.name}</strong>
-                      <small>
-                        {asset.format?.toUpperCase() ?? asset.category}
-                      </small>
-                    </span>
                   </button>
                 ))}
               </div>
@@ -817,16 +1412,7 @@ function LevelBuilderViewport({
                     }}
                     type="button"
                   >
-                    <BuilderModelViewer
-                      compact
-                      fitMaxSize={0.95}
-                      interactive={false}
-                      src={object.fileUrl}
-                    />
-                    <span>
-                      <strong>{object.name}</strong>
-                      <small>{object.scale[0].toFixed(2)}x</small>
-                    </span>
+                    <BuilderPlacedSummary object={object} />
                   </button>
                   <div className="builder-object-controls">
                     <select
@@ -936,19 +1522,21 @@ function LevelBuilderViewport({
               </group>
             ) : null}
           </Suspense>
-          <mesh
-            rotation={[-Math.PI / 2, 0, 0]}
-            onClick={handleGroundClick}
-            receiveShadow
-          >
-            <planeGeometry args={[120, 120]} />
-            <meshStandardMaterial
-              color="#0b1224"
-              transparent
-              opacity={0}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
+          {!draft.mapModelUrl ? (
+            <mesh
+              rotation={[-Math.PI / 2, 0, 0]}
+              onClick={handleGroundClick}
+              receiveShadow
+            >
+              <planeGeometry args={[120, 120]} />
+              <meshStandardMaterial
+                color="#0b1224"
+                transparent
+                opacity={0}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          ) : null}
           {selectedPlayerCharacter?.fileUrl ? (
             <PlayerMarker
               fitHeight={mapRelativeScale.characterHeight}
@@ -1212,6 +1800,7 @@ function LevelEditorPanel({
         assetLibrary={assetLibrary}
         draft={draft}
         selectedAssetId={selectedAssetId}
+        setAssetLibrary={setAssetLibrary}
         setDraft={setDraft}
         setSelectedAssetId={setSelectedAssetId}
       />
@@ -1619,6 +2208,133 @@ export function GameWorkbench() {
   const [draft, setDraft] = useState<EditableLevelDraft | null>(null);
   const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
 
+  const selectedPlayerCharacter = draft?.playerCharacter;
+  const selectedPlayerAsset = selectedPlayerCharacter
+    ? assetLibrary.find((asset) => asset.id === selectedPlayerCharacter.modelId)
+    : null;
+  const selectedPlayerActions = useMemo(
+    () => getCharacterActionsFromAsset(selectedPlayerAsset),
+    [selectedPlayerAsset],
+  );
+
+  const setActiveGameplayAction = useGameStore((state) => state.setActiveGameplayAction);
+
+  const [activeGameplayActionId, setActiveGameplayActionId] = useState<
+    string | null
+  >(null);
+
+  const triggerGameplayAction = (actionId: string) => {
+    const action = selectedPlayerActions.find((a) => a.id === actionId);
+    if (action) {
+      setActiveGameplayAction(action.fileUrl, action.name);
+      setActiveGameplayActionId(actionId);
+      setTimeout(() => {
+        setActiveGameplayActionId((current) => {
+          if (current === actionId) {
+            setActiveGameplayAction(null, null);
+            return null;
+          }
+          return current;
+        });
+      }, 1500);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "play" || !selectedPlayerActions.length) return;
+
+    const keysPressed = new Set<string>();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "SELECT"
+      ) {
+        return;
+      }
+
+      let key = e.key;
+      if (e.code === "Space") key = "Space";
+      if (key === "Control") key = "Ctrl";
+      if (key.length === 1) key = key.toUpperCase();
+
+      keysPressed.add(key);
+
+      const keysArray = Array.from(keysPressed);
+      keysArray.sort((a, b) => {
+        const modifiers = ["Ctrl", "Shift", "Alt"];
+        const aIdx = modifiers.indexOf(a);
+        const bIdx = modifiers.indexOf(b);
+        if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+        if (aIdx !== -1) return -1;
+        if (bIdx !== -1) return 1;
+        return a.localeCompare(b);
+      });
+
+      const pressedCombo = keysArray.join("+");
+
+      let matchedAction = null;
+      if (["W", "A", "S", "D"].includes(key)) {
+        matchedAction = selectedPlayerActions.find(
+          (action) => action.enabled && action.keyBinding === "W+A+S+D",
+        );
+      }
+      if (!matchedAction) {
+        matchedAction = selectedPlayerActions.find(
+          (action) => action.enabled && action.keyBinding === pressedCombo,
+        );
+      }
+
+      if (matchedAction) {
+        setActiveGameplayAction(matchedAction.fileUrl, matchedAction.name);
+        setActiveGameplayActionId(matchedAction.id);
+        if (matchedAction.keyBinding !== "W+A+S+D") {
+          setTimeout(() => {
+            setActiveGameplayActionId((current) => {
+              if (current === matchedAction!.id) {
+                setActiveGameplayAction(null, null);
+                return null;
+              }
+              return current;
+            });
+          }, 1500);
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      let key = e.key;
+      if (e.code === "Space") key = "Space";
+      if (key === "Control") key = "Ctrl";
+      if (key.length === 1) key = key.toUpperCase();
+
+      keysPressed.delete(key);
+
+      const hasMovementKeys = Array.from(keysPressed).some((k) =>
+        ["W", "A", "S", "D"].includes(k),
+      );
+      if (!hasMovementKeys) {
+        setActiveGameplayActionId((current) => {
+          if (current) {
+            const currentAction = selectedPlayerActions.find((a) => a.id === current);
+            if (currentAction && currentAction.keyBinding === "W+A+S+D") {
+              setActiveGameplayAction(null, null);
+              return null;
+            }
+          }
+          return current;
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [activeTab, selectedPlayerActions, setActiveGameplayAction]);
+
   useEffect(() => {
     loadSavedLevels();
     loadWeaponLoadouts();
@@ -1737,11 +2453,16 @@ export function GameWorkbench() {
       </nav>
 
       {activeTab === "play" && (
-        <>
-          <GameCanvas />
+        <div style={{ position: "relative", width: "100%", height: "calc(100vh - 50px)" }}>
+          <GameCanvas playerActions={selectedPlayerActions} />
           <HUD />
           <DialogueSystem />
-        </>
+          <ManualActionConfigPanel
+            actions={selectedPlayerActions}
+            activeActionId={activeGameplayActionId}
+            onTriggerAction={triggerGameplayAction}
+          />
+        </div>
       )}
       {activeTab === "maps" && (
         <MapsPanel

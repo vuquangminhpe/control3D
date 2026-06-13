@@ -1,7 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import React, { Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useFrame, useThree, useLoader } from "@react-three/fiber";
+import { useGLTF, useFBX } from "@react-three/drei";
+import { FBXLoader, SkeletonUtils } from "three-stdlib";
 import { RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier";
 import * as THREE from "three";
 import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
@@ -15,21 +17,179 @@ const BOW_GRAVITY = -19.8;
 const BOW_TRAJECTORY_STEPS = 28;
 const BOW_TRAJECTORY_STEP_SECONDS = 0.075;
 
+function isGltfSource(url: string) {
+  const normalized = url.split("?")[0].split("#").pop() ?? url;
+  return normalized.endsWith(".glb") || normalized.endsWith(".gltf");
+}
+
+function isFbxSource(url: string) {
+  const normalized = url.split("?")[0].split("#").pop() ?? url;
+  return normalized.endsWith(".fbx");
+}
+
+function AnimationMixerController({ model, clip }: { model: THREE.Object3D; clip: THREE.AnimationClip }) {
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+
+  useEffect(() => {
+    const mixer = new THREE.AnimationMixer(model);
+    mixerRef.current = mixer;
+
+    const action = mixer.clipAction(clip);
+    action.reset();
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.enabled = true;
+    action.play();
+
+    return () => {
+      action.stop();
+      mixer.stopAllAction();
+      mixer.uncacheRoot(model);
+      mixerRef.current = null;
+    };
+  }, [model, clip]);
+
+  useFrame((_, delta) => {
+    if (mixerRef.current) {
+      mixerRef.current.update(delta);
+    }
+  });
+
+  return null;
+}
+
+type PlayerAnimationPlayerProps = {
+  modelSrc: string;
+  animationUrl: string;
+  fitHeight: number;
+};
+
+function FbxAnimationLoader({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+  const animFbx = useLoader(FBXLoader, animationUrl);
+  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
+  const clip = animFbx.animations?.[0];
+
+  return (
+    <>
+      <Suspense fallback={null}>
+        <ModelLoader
+          debugLabel="runtime-player-visual-fbx-anim"
+          fitHeight={fitHeight}
+          groundToY={0}
+          src={modelSrc}
+          onSceneReady={setModelScene}
+        />
+      </Suspense>
+      {modelScene && clip && <AnimationMixerController model={modelScene} clip={clip} />}
+    </>
+  );
+}
+
+function GltfAnimationLoader({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+  const { animations } = useGLTF(animationUrl, "https://www.gstatic.com/draco/v1/decoders/");
+  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
+  const clip = animations?.[0];
+
+  return (
+    <>
+      <Suspense fallback={null}>
+        <ModelLoader
+          debugLabel="runtime-player-visual-gltf-anim"
+          fitHeight={fitHeight}
+          groundToY={0}
+          src={modelSrc}
+          onSceneReady={setModelScene}
+        />
+      </Suspense>
+      {modelScene && clip && <AnimationMixerController model={modelScene} clip={clip} />}
+    </>
+  );
+}
+
+function PlayerAnimationPlayer({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+  const isAnimFbx = isFbxSource(animationUrl);
+
+  if (isAnimFbx) {
+    return <FbxAnimationLoader modelSrc={modelSrc} animationUrl={animationUrl} fitHeight={fitHeight} />;
+  } else {
+    return <GltfAnimationLoader modelSrc={modelSrc} animationUrl={animationUrl} fitHeight={fitHeight} />;
+  }
+}
+
+function StaticPlayerVisual({ modelSrc, fitHeight }: { modelSrc: string; fitHeight: number }) {
+  return (
+    <Suspense fallback={null}>
+      <ModelLoader
+        debugLabel="runtime-player-visual-static"
+        fitHeight={fitHeight}
+        groundToY={0}
+        src={modelSrc}
+      />
+    </Suspense>
+  );
+}
+
+interface AnimationErrorBoundaryProps {
+  children: React.ReactNode;
+  onClearAction: () => void;
+}
+
+class AnimationErrorBoundary extends React.Component<AnimationErrorBoundaryProps, { hasError: boolean }> {
+  constructor(props: AnimationErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.error("Caught animation loading error:", error);
+    this.props.onClearAction();
+  }
+
+  componentDidUpdate(prevProps: AnimationErrorBoundaryProps) {
+    if (this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return null;
+    }
+    return this.props.children;
+  }
+}
+
 function CustomPlayerVisual({ src }: { src: string }) {
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const fitHeight = 1.85 * mapScaleRatio;
-  const posY = -1.5 * mapScaleRatio;
+  const activeGameplayActionUrl = useGameStore((state) => state.activeGameplayActionUrl);
+
   log3DDebug(
-    `player-visual:${src}:${fitHeight}:${posY}`,
+    `player-visual:${src}:${fitHeight}:${activeGameplayActionUrl ?? "none"}`,
     "Player visual fit",
-    { src, mapScaleRatio, fitHeight, posY },
+    { src, mapScaleRatio, fitHeight, activeGameplayActionUrl },
     { once: true },
   );
+
   return (
-    <group position={[0, posY, 0]}>
-      <Suspense fallback={null}>
-        <ModelLoader debugLabel="runtime-player-visual" fitHeight={fitHeight} groundToY={0} src={src} />
-      </Suspense>
+    <group position={[0, 0, 0]}>
+      {activeGameplayActionUrl ? (
+        <AnimationErrorBoundary
+          key={activeGameplayActionUrl}
+          onClearAction={() => useGameStore.getState().setActiveGameplayAction(null, null)}
+        >
+          <PlayerAnimationPlayer
+            modelSrc={src}
+            animationUrl={activeGameplayActionUrl}
+            fitHeight={fitHeight}
+          />
+        </AnimationErrorBoundary>
+      ) : (
+        <StaticPlayerVisual modelSrc={src} fitHeight={fitHeight} />
+      )}
     </group>
   );
 }

@@ -6,7 +6,8 @@ type DebugOptions = {
 };
 
 const DEBUG_STORAGE_KEY = "control3d.debug3d";
-const DEBUG_LOGS_STORAGE_KEY = "control3d.debug3d.logs";
+const LEGACY_DEBUG_LOGS_STORAGE_KEY = "control3d.debug3d.logs";
+const DEBUG_LOGS_STORAGE_KEY = "control3d.debug3d.logs.v2";
 const DEBUG_LOG_LIMIT_STORAGE_KEY = "control3d.debug3d.logLimit";
 const DEFAULT_LOG_LIMIT = 500;
 const lastLogAt = new Map<string, number>();
@@ -38,11 +39,13 @@ function isDebug3DEnabled() {
   }
 
   try {
+    window.localStorage.removeItem(LEGACY_DEBUG_LOGS_STORAGE_KEY);
     const paramValue = new URLSearchParams(window.location.search).get("debug3d");
+    if (paramValue === "1" || paramValue === "true") return true;
     if (paramValue === "0" || paramValue === "false") return false;
-    return window.localStorage.getItem(DEBUG_STORAGE_KEY) !== "0";
+    return window.localStorage.getItem(DEBUG_STORAGE_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -133,8 +136,12 @@ function persistLog(record: DebugLogRecord) {
 function installDebugHelpers() {
   if (typeof window === "undefined" || window.Control3DDebug) return;
 
+  window.localStorage.removeItem(LEGACY_DEBUG_LOGS_STORAGE_KEY);
   window.Control3DDebug = {
-    clear: () => window.localStorage.removeItem(DEBUG_LOGS_STORAGE_KEY),
+    clear: () => {
+      window.localStorage.removeItem(LEGACY_DEBUG_LOGS_STORAGE_KEY);
+      window.localStorage.removeItem(DEBUG_LOGS_STORAGE_KEY);
+    },
     export: () => JSON.stringify(readStoredLogs(), null, 2),
     logs: readStoredLogs,
     storageKey: DEBUG_LOGS_STORAGE_KEY,

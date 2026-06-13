@@ -111,7 +111,14 @@ export type AnimationAssetRecord = {
   updatedAt: string;
 };
 
-export type CharacterActionTrigger = "none" | "attack" | "talk" | "move" | "custom";
+export type CharacterActionTrigger =
+  | "none"
+  | "attack"
+  | "talk"
+  | "move"
+  | "custom"
+  | "crouch"
+  | "jump";
 
 export type CharacterActionLinkRecord = {
   id: string;
@@ -169,6 +176,8 @@ export type StoryNodeRecord = {
   modelName?: string | null;
   fileUrl?: string | null;
   action?: string | null;
+  characterActionId?: string | null;
+  characterActionName?: string | null;
   condition?: string | null;
   currencyChange?: number | null;
   position: { x: number; y: number };

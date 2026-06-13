@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState, useTransition, useRef } from "react";
+import React, { Suspense, useEffect, useMemo, useState, useTransition, useRef } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
@@ -111,6 +111,144 @@ function getRiggedPreviewUrl(character: ModelRecord | null) {
   return getRiggingMetadata(character).riggedModelUrl ?? null;
 }
 
+function KeyBindingInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (val: string | null) => void;
+  disabled?: boolean;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [localValue, setLocalValue] = useState<string | null>(value);
+  const keysPressed = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!recording) {
+      setLocalValue(value);
+    }
+  }, [value, recording]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    let keyName = e.key;
+    if (e.code === "Space") {
+      keyName = "Space";
+    }
+
+    if (keyName === "Control") keyName = "Ctrl";
+    if (keyName === "Escape") {
+      setLocalValue(null);
+      onChange(null);
+      setRecording(false);
+      keysPressed.current.clear();
+      return;
+    }
+
+    if (keyName.length === 1) {
+      keyName = keyName.toUpperCase();
+    }
+
+    keysPressed.current.add(keyName);
+
+    const keysArray = Array.from(keysPressed.current);
+    keysArray.sort((a, b) => {
+      const modifiers = ["Ctrl", "Shift", "Alt"];
+      const aIdx = modifiers.indexOf(a);
+      const bIdx = modifiers.indexOf(b);
+      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+      if (aIdx !== -1) return -1;
+      if (bIdx !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    setLocalValue(keysArray.join("+"));
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const hasOnlyModifiers = Array.from(keysPressed.current).every((k) =>
+      ["Ctrl", "Shift", "Alt"].includes(k),
+    );
+    if (!hasOnlyModifiers && keysPressed.current.size > 0) {
+      const finalVal = localValue;
+      onChange(finalVal);
+      setRecording(false);
+      keysPressed.current.clear();
+    }
+  };
+
+  const handleBlur = () => {
+    if (recording) {
+      onChange(localValue);
+      setRecording(false);
+      keysPressed.current.clear();
+    }
+  };
+
+  return (
+    <div style={{ position: "relative", width: "72px" }}>
+      <input
+        type="text"
+        readOnly
+        disabled={disabled}
+        value={recording ? "Press..." : (localValue || "No key")}
+        onKeyDown={handleKeyDown}
+        onKeyUp={handleKeyUp}
+        onFocus={() => {
+          setRecording(true);
+          keysPressed.current.clear();
+        }}
+        onBlur={handleBlur}
+        style={{
+          width: "100%",
+          height: "28px",
+          border: recording ? "1px solid #0d9488" : "1px solid #cbd5e0",
+          borderRadius: "6px",
+          background: recording ? "#f0fdfa" : "#fff",
+          color: recording ? "#0d9488" : "#2d3748",
+          fontSize: "11px",
+          fontWeight: "800",
+          textAlign: "center",
+          cursor: "pointer",
+          outline: "none",
+        }}
+        title="Click to record keys. Press Escape to clear."
+      />
+      {value && !recording && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange(null);
+          }}
+          style={{
+            position: "absolute",
+            right: "4px",
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: "none",
+            border: "none",
+            color: "#e53e3e",
+            cursor: "pointer",
+            fontSize: "10px",
+            padding: "2px",
+            fontWeight: "bold",
+          }}
+          title="Clear binding"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 function getCharacterActions(character: ModelRecord | null): CharacterActionLinkRecord[] {
   const manifest = character?.customProps?.characterAnimation;
   if (!manifest || typeof manifest !== "object" || !("actions" in manifest) || !Array.isArray(manifest.actions)) {
@@ -156,7 +294,7 @@ function CharacterCardViewer({ src }: { src: string }) {
       <directionalLight intensity={1.8} position={[3, 4, 3]} />
       <directionalLight intensity={0.45} position={[-3, 2, -2]} />
       <Suspense fallback={null}>
-        <ModelLoader fitHeight={1.55} groundToY={0} src={src} onSceneReady={setModelRoot} />
+        <ModelLoader debugLabel="models-character-card" fitHeight={1.55} groundToY={0} src={src} onSceneReady={setModelRoot} />
       </Suspense>
       <ThumbnailAutoFit controlsRef={controlsRef} model={modelRoot} />
       <OrbitControls ref={controlsRef} autoRotate autoRotateSpeed={1.1} enablePan={false} enableRotate={false} enableZoom={false} makeDefault />
@@ -186,13 +324,17 @@ export function MixamoAssetWorkspace({
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [appliedAnimation, setAppliedAnimation] = useState<{
     actionId: string;
+    actionName?: string;
+    animationSrc?: string | null;
     animationId: string;
     characterId: string;
     exportUrl: string;
+    linkId?: string;
     previewUrl: string;
   } | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [isApplyingAnimation, setIsApplyingAnimation] = useState(false);
+  const [previewingCharacterActionId, setPreviewingCharacterActionId] = useState<string | null>(null);
 
   const selectedCharacter = characters.find((character) => character.id === selectedCharacterId) ?? characters[0] ?? null;
   const selectedAnimation = animations.find((animation) => animation.id === selectedAnimationId) ?? animations[0] ?? null;
@@ -201,82 +343,9 @@ export function MixamoAssetWorkspace({
     ?? selectedAnimation?.actions[0]
     ?? null;
   const selectedRiggedUrl = getRiggedPreviewUrl(selectedCharacter);
-  const selectedBakeKey =
-    selectedCharacter && selectedAnimation && selectedAction
-      ? `${selectedCharacter.id}:${selectedAnimation.id}:${selectedAction.id}`
-      : "";
-  const appliedBakeKey = appliedAnimation
-    ? `${appliedAnimation.characterId}:${appliedAnimation.animationId}:${appliedAnimation.actionId}`
-    : "";
-  const activePreviewUrl = selectedBakeKey && appliedBakeKey === selectedBakeKey
-    ? appliedAnimation?.previewUrl ?? selectedRiggedUrl
-    : selectedRiggedUrl;
-
-  useEffect(() => {
-    if (activeTab !== "animations" || !selectedCharacter || !selectedAnimation || !selectedAction || !selectedRiggedUrl) {
-      setIsApplyingAnimation(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    setIsApplyingAnimation(true);
-    setApplyError(null);
-    setAppliedAnimation((current) => {
-      if (
-        current?.characterId === selectedCharacter.id &&
-        current.animationId === selectedAnimation.id &&
-        current.actionId === selectedAction.id
-      ) {
-        return current;
-      }
-      return null;
-    });
-
-    fetch("/api/animations/apply", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        actionId: selectedAction.id,
-        animationId: selectedAnimation.id,
-        characterId: selectedCharacter.id,
-      }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null) as {
-          success?: boolean;
-          data?: {
-            action?: { id?: string };
-            animationId?: string;
-            characterId?: string;
-            exportUrl?: string;
-            previewUrl?: string;
-          };
-          error?: string;
-        } | null;
-        if (!response.ok || !payload?.success || !payload.data?.previewUrl || !payload.data.exportUrl) {
-          throw new Error(payload?.error ?? "Failed to apply animation action");
-        }
-        setAppliedAnimation({
-          actionId: payload.data.action?.id ?? selectedAction.id,
-          animationId: payload.data.animationId ?? selectedAnimation.id,
-          characterId: payload.data.characterId ?? selectedCharacter.id,
-          exportUrl: payload.data.exportUrl,
-          previewUrl: payload.data.previewUrl,
-        });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setApplyError(error instanceof Error ? error.message : "Failed to apply animation action");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsApplyingAnimation(false);
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [activeTab, selectedAction, selectedAnimation, selectedCharacter, selectedRiggedUrl]);
+  const activeActionPreview = appliedAnimation?.characterId === selectedCharacter?.id
+    ? appliedAnimation
+    : null;
 
   const filteredCharacters = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -313,6 +382,24 @@ export function MixamoAssetWorkspace({
   const selectAnimation = (animation: AnimationAssetRecord) => {
     setSelectedAnimationId(animation.id);
     setSelectedActionId(animation.actions[0]?.id ?? "");
+  };
+
+  const previewCharacterAction = async (action: CharacterActionLinkRecord) => {
+    if (!selectedCharacter) return;
+    setApplyError(null);
+    setAppliedAnimation({
+      actionId: action.actionId,
+      actionName: action.name,
+      animationSrc:
+        action.sourceFormat === "fbx" && action.fileUrl.toLowerCase().endsWith(".fbx")
+          ? action.fileUrl
+          : null,
+      animationId: action.animationAssetId,
+      characterId: selectedCharacter.id,
+      exportUrl: selectedCharacter.fileUrl,
+      linkId: action.id,
+      previewUrl: selectedCharacter.fileUrl,
+    });
   };
 
   const startPaneResize = (pane: "left" | "right", startX: number) => {
@@ -457,7 +544,25 @@ export function MixamoAssetWorkspace({
           </div>
           <div className="mixamo-preview-stage">
             {selectedCharacter ? (
-              <InspectViewer src={selectedCharacter.fileUrl} />
+              activeActionPreview ? (
+                <div className="mixamo-animation-preview-wrap">
+                  <RiggedAnimationPreview
+                    animationSrc={activeActionPreview.animationSrc}
+                    actionName={activeActionPreview.actionName}
+                    cacheKey={`${activeActionPreview.characterId}:${activeActionPreview.animationId}:${activeActionPreview.actionId}`}
+                    src={activeActionPreview.previewUrl}
+                  />
+                  <div className="mixamo-action-overlay">
+                    <span>Action preview</span>
+                    <strong>{activeActionPreview.actionName ?? "Character action"}</strong>
+                    <button onClick={() => setAppliedAnimation(null)} type="button">
+                      Back to source model
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <InspectViewer src={selectedCharacter.fileUrl} />
+              )
             ) : (
               <div className="mixamo-stage-empty">
                 <strong>Select a character</strong>
@@ -483,11 +588,16 @@ export function MixamoAssetWorkspace({
 
         <aside className="mixamo-action-pane">
           <CharacterActions
+            activePreviewActionId={activeActionPreview?.linkId ?? null}
+            applyError={applyError}
             character={selectedCharacter}
+            isApplyingAnimation={isApplyingAnimation}
             onOpenRig={() => {
               setModalCharacter(selectedCharacter);
               setUploadModal("characters");
             }}
+            onPreviewAction={previewCharacterAction}
+            previewingActionId={previewingCharacterActionId}
             stats={stats}
           />
         </aside>
@@ -509,12 +619,22 @@ export function MixamoAssetWorkspace({
 }
 
 function CharacterActions({
+  activePreviewActionId,
+  applyError,
   character,
+  isApplyingAnimation,
   onOpenRig,
+  onPreviewAction,
+  previewingActionId,
   stats,
 }: {
+  activePreviewActionId: string | null;
+  applyError: string | null;
   character: ModelRecord | null;
+  isApplyingAnimation: boolean;
   onOpenRig: () => void;
+  onPreviewAction: (action: CharacterActionLinkRecord) => void;
+  previewingActionId: string | null;
   stats: MixamoAssetWorkspaceProps["stats"];
 }) {
   const router = useRouter();
@@ -525,10 +645,13 @@ function CharacterActions({
     setLocalActions(getCharacterActions(character));
   }, [character]);
 
-  const updateActionEnabled = async (actionId: string, enabled: boolean) => {
+  const updateActionBinding = async (
+    actionId: string,
+    updates: Partial<Pick<CharacterActionLinkRecord, "enabled" | "trigger" | "keyBinding">>
+  ) => {
     if (!character) return;
     const nextActions = localActions.map((action) =>
-      action.id === actionId ? { ...action, enabled } : action
+      action.id === actionId ? { ...action, ...updates } : action
     );
     setLocalActions(nextActions);
     setSavingActionId(actionId);
@@ -544,6 +667,68 @@ function CharacterActions({
       router.refresh();
     } finally {
       setSavingActionId(null);
+    }
+  };
+
+  const getSmartActionBinding = (name: string): { trigger: CharacterActionLinkRecord["trigger"]; keyBinding: string | null } | null => {
+    const norm = name.toLowerCase();
+    if (norm.includes("crouch") || norm.includes("cround") || norm.includes("crch") || norm.includes("crd")) {
+      return { trigger: "crouch", keyBinding: "Space" };
+    }
+    if (norm.includes("jump") || norm.includes("jmp") || norm.includes("leap")) {
+      return { trigger: "jump", keyBinding: "Space" };
+    }
+    if (norm.includes("talk") || norm.includes("speak") || norm.includes("dialogue") || norm.includes("bark") || norm.includes("chat") || norm.includes("say")) {
+      return { trigger: "talk", keyBinding: "E" };
+    }
+    if (norm.includes("walk") || norm.includes("run") || norm.includes("sprint") || norm.includes("move") || norm.includes("go") || norm.includes("idle")) {
+      return { trigger: "move", keyBinding: "W+A+S+D" };
+    }
+    if (norm.includes("attack") || norm.includes("slash") || norm.includes("kick") || norm.includes("punch") || norm.includes("fight") || norm.includes("shoot") || norm.includes("hit") || norm.includes("combo")) {
+      let key = "J";
+      if (norm.includes("heavy") || norm.includes("kick") || norm.includes("2")) {
+        key = "K";
+      } else if (norm.includes("alt") || norm.includes("shoot") || norm.includes("3")) {
+        key = "RMB";
+      }
+      return { trigger: "attack", keyBinding: key };
+    }
+    return null;
+  };
+
+  const autoMatchActions = async () => {
+    if (!character) return;
+    let hasChanges = false;
+    const nextActions = localActions.map((action) => {
+      const match = getSmartActionBinding(action.name);
+      if (match) {
+        hasChanges = true;
+        return {
+          ...action,
+          enabled: true,
+          trigger: match.trigger,
+          keyBinding: match.keyBinding,
+        };
+      }
+      return action;
+    });
+
+    if (hasChanges) {
+      setLocalActions(nextActions);
+      setSavingActionId("all");
+      try {
+        await fetch(`/api/models/${character.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            hasAnimations: nextActions.some((action) => action.enabled),
+            customProps: writeCharacterActions(character.customProps, nextActions),
+          }),
+        });
+        router.refresh();
+      } finally {
+        setSavingActionId(null);
+      }
     }
   };
 
@@ -584,31 +769,148 @@ function CharacterActions({
         </a>
       ) : null}
       {localActions.length ? (
-        <section className="mixamo-character-action-panel">
-          <div>
-            <span>Character actions</span>
-            <strong>{localActions.length} imported</strong>
+        <section className="mixamo-character-action-panel" style={{ marginTop: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <span style={{ fontSize: "14px", fontWeight: "bold", color: "#2d3748" }}>Character actions ({localActions.length})</span>
+            <button
+              type="button"
+              onClick={autoMatchActions}
+              disabled={savingActionId === "all"}
+              style={{
+                background: "rgba(13, 148, 136, 0.1)",
+                border: "1px solid #0d9488",
+                color: "#0d9488",
+                padding: "4px 10px",
+                borderRadius: "6px",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              {savingActionId === "all" ? "Matching..." : "Auto Match"}
+            </button>
           </div>
-          <div className="mixamo-character-action-list">
+          <div className="mixamo-character-action-list" style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "480px", overflowY: "auto" }}>
             {localActions.map((action) => (
-              <label key={action.id}>
-                <input
-                  checked={action.enabled}
-                  disabled={savingActionId === action.id}
-                  onChange={(event) => {
-                    void updateActionEnabled(action.id, event.target.checked);
-                  }}
-                  type="checkbox"
-                />
-                <span>
-                  <strong>{action.name}</strong>
-                  <small>{action.sourceFormat.toUpperCase()} · {action.trigger === "none" ? "Map editor config" : action.trigger}</small>
-                </span>
-              </label>
+              <div
+                className="mixamo-character-action-card"
+                key={action.id}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  padding: "10px",
+                  border: "1px solid #cbd5e0",
+                  borderRadius: "8px",
+                  background: "#fff",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.03)"
+                }}
+              >
+                {/* Line 1: Checkbox + Name + Test Button */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", gap: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0, cursor: "pointer" }}>
+                    <input
+                      checked={action.enabled}
+                      disabled={savingActionId === action.id || savingActionId === "all"}
+                      onChange={(event) => {
+                        void updateActionBinding(action.id, { enabled: event.target.checked });
+                      }}
+                      type="checkbox"
+                      style={{ width: "14px", height: "14px", cursor: "pointer", accentColor: "#ff8a21" }}
+                    />
+                    <span
+                      title={action.name}
+                      style={{
+                        display: "block",
+                        textOverflow: "ellipsis",
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                        fontSize: "13px",
+                        fontWeight: "600",
+                        color: "#2d3748"
+                      }}
+                    >
+                      {action.name}
+                    </span>
+                  </label>
+
+                  <button
+                    className={activePreviewActionId === action.id ? "active" : ""}
+                    disabled={previewingActionId === action.id || isApplyingAnimation || savingActionId === action.id || savingActionId === "all"}
+                    onClick={() => onPreviewAction(action)}
+                    type="button"
+                    style={{
+                      minWidth: "68px",
+                      height: "26px",
+                      padding: "0 10px",
+                      fontSize: "10px",
+                      fontWeight: "900",
+                      textTransform: "uppercase",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      border: activePreviewActionId === action.id ? "1px solid #ff4a00" : "1px solid #d2d6dc",
+                      background: activePreviewActionId === action.id ? "#ff4a00" : "#fff",
+                      color: activePreviewActionId === action.id ? "#fff" : "#4a5568",
+                    }}
+                  >
+                    {previewingActionId === action.id ? "..." : activePreviewActionId === action.id ? "Stop" : "TEST"}
+                  </button>
+                </div>
+
+                {/* Line 2: Trigger Select + KeyBindingInput */}
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", paddingLeft: "22px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1 }}>
+                    <span style={{ display: "inline-block", fontSize: "11px", color: "#718096" }}>Trigger:</span>
+                    <select
+                      aria-label={`Trigger ${action.name}`}
+                      disabled={savingActionId === action.id || savingActionId === "all"}
+                      value={action.trigger}
+                      onChange={(event) => {
+                        void updateActionBinding(action.id, {
+                          trigger: event.target.value as CharacterActionLinkRecord["trigger"],
+                        });
+                      }}
+                      style={{
+                        height: "28px",
+                        background: "#fff",
+                        border: "1px solid #cbd5e0",
+                        borderRadius: "6px",
+                        color: "#2d3748",
+                        fontSize: "11px",
+                        outline: "none",
+                        padding: "0 4px",
+                        flex: 1,
+                        minWidth: 0,
+                        cursor: "pointer"
+                      }}
+                    >
+                      <option value="none">Manual</option>
+                      <option value="attack">Attack</option>
+                      <option value="move">Move</option>
+                      <option value="talk">Talk</option>
+                      <option value="crouch">Crouch</option>
+                      <option value="jump">Jump</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ display: "inline-block", fontSize: "11px", color: "#718096" }}>Key:</span>
+                    <KeyBindingInput
+                      disabled={savingActionId === action.id || savingActionId === "all"}
+                      value={action.keyBinding}
+                      onChange={(val) => {
+                        void updateActionBinding(action.id, { keyBinding: val });
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
         </section>
       ) : null}
+      {applyError ? <small className="mixamo-side-error">{applyError}</small> : null}
       <small className="mixamo-side-note">
         {localActions.length
           ? "Enabled actions will be available for Map Editor behavior setup."

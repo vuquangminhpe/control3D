@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Canvas, useFrame, useLoader } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
-import { OrbitControls, Html, Environment, Sky, Line } from "@react-three/drei";
+import { OrbitControls, Html, Environment, Sky, Line, useGLTF } from "@react-three/drei";
+import { FBXLoader } from "three-stdlib";
 import * as THREE from "three";
 import { useShallow } from "zustand/react/shallow";
 import { getEnemyRuntimePosition, useGameStore, type ArrowProjectileState } from "@/store/gameStore";
@@ -54,11 +55,41 @@ function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject
 const runtimeRaycaster = new THREE.Raycaster();
 const runtimeDownVector = new THREE.Vector3(0, -1, 0);
 
+function getRuntimeTerrainHitNormalY(hit: THREE.Intersection) {
+  if (!hit.face) return 1;
+  const normal = hit.face.normal.clone();
+  normal.transformDirection(hit.object.matrixWorld);
+  return normal.y;
+}
+
+function pickRuntimeTerrainSurfaceHit(
+  hits: THREE.Intersection[],
+  preferredY: number,
+) {
+  const surfaceHits = hits.filter((hit) => hit.object.userData.isTerrainSurface);
+  const upwardHits = surfaceHits.filter(
+    (hit) => getRuntimeTerrainHitNormalY(hit) > 0.12,
+  );
+  const candidates = upwardHits.length ? upwardHits : surfaceHits;
+  return candidates.sort((a, b) => {
+    const aDelta = Math.abs(a.point.y - preferredY);
+    const bDelta = Math.abs(b.point.y - preferredY);
+    if (Math.abs(aDelta - bDelta) > 0.001) return aDelta - bDelta;
+    return b.point.y - a.point.y;
+  })[0] ?? null;
+}
+
 function getRuntimeTerrainY(terrain: THREE.Object3D, x: number, z: number, fallbackY: number) {
   terrain.updateMatrixWorld(true);
-  runtimeRaycaster.set(new THREE.Vector3(x, 1000, z), runtimeDownVector);
-  const hit = runtimeRaycaster.intersectObject(terrain, true)
-    .find((entry) => entry.object.userData.isTerrainSurface);
+  const bounds = new THREE.Box3().setFromObject(terrain);
+  const rayStartY = bounds.isEmpty()
+    ? 1000
+    : bounds.max.y + Math.max(bounds.getSize(new THREE.Vector3()).y, 20);
+  runtimeRaycaster.set(new THREE.Vector3(x, rayStartY, z), runtimeDownVector);
+  const hit = pickRuntimeTerrainSurfaceHit(
+    runtimeRaycaster.intersectObject(terrain, true),
+    fallbackY,
+  );
   return hit?.point.y ?? fallbackY;
 }
 
@@ -77,7 +108,7 @@ function snapRuntimeToTerrain(terrain: THREE.Object3D) {
       );
       return [
         Number(position[0].toFixed(2)),
-        Number((groundY + heightOffset).toFixed(2)),
+        Number(groundY.toFixed(2)),
         Number(position[2].toFixed(2)),
       ];
     };
@@ -349,7 +380,43 @@ function ArrowProjectileLayer({ terrainScene }: { terrainScene: THREE.Object3D |
   );
 }
 
-export function GameCanvas() {
+class PreloadErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: any) {
+    console.warn("Preloader failed for animation asset:", error);
+  }
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
+function FbxPreloader({ url }: { url: string }) {
+  useLoader(FBXLoader, url);
+  return null;
+}
+
+function GltfPreloader({ url }: { url: string }) {
+  useGLTF(url, "https://www.gstatic.com/draco/v1/decoders/");
+  return null;
+}
+
+function AnimationAssetPreloader({ url }: { url: string }) {
+  const isFbx = url.split("?")[0].split("#").pop()?.endsWith(".fbx");
+  if (isFbx) {
+    return <FbxPreloader url={url} />;
+  } else {
+    return <GltfPreloader url={url} />;
+  }
+}
+
+export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
   const controlsRef = useRef<any>(null);
   const [terrainScene, setTerrainScene] = useState<THREE.Object3D | null>(null);
   const [groundReady, setGroundReady] = useState(false);
@@ -425,6 +492,17 @@ export function GameCanvas() {
         <Environment preset="sunset" background={false} />
 
         <Suspense fallback={<Html center><div className="loading-spinner">Loading cyber assets...</div></Html>}>
+          {/* Preload all enabled animations in a hidden group */}
+          <group visible={false}>
+            {playerActions
+              .filter((action) => action.enabled && action.fileUrl)
+              .map((action) => (
+                <PreloadErrorBoundary key={action.id}>
+                  <AnimationAssetPreloader url={action.fileUrl} />
+                </PreloadErrorBoundary>
+              ))}
+          </group>
+
           <Physics gravity={[0, -19.8 * mapScaleRatio, 0]}>
             {/* Terrain Level */}
             {hasMap ? <Terrain onReady={handleTerrainReady} /> : null}

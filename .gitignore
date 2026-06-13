@@ -13,3 +13,11 @@ coverage/
 apps/web/public/uploads/*
 !apps/web/public/uploads/.gitkeep
 !apps/web/public/uploads/models/.gitkeep
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal

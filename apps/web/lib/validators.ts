@@ -59,6 +59,8 @@ export const storyNodeSchema = z.object({
   modelName: z.string().nullable().optional(),
   fileUrl: z.string().nullable().optional(),
   action: z.string().nullable().optional(),
+  characterActionId: z.string().nullable().optional(),
+  characterActionName: z.string().nullable().optional(),
   condition: z.string().nullable().optional(),
   currencyChange: z.number().nullable().optional(),
   position: storyNodePositionSchema,
@@ -86,7 +88,7 @@ export const storyEdgeSchema = z.object({
 export const storyVariableSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  type: z.enum(["string", "number", "boolean"]),
+  type: z.enum(["string", "number", "boolean", "character"]),
   defaultValue: z.union([z.string(), z.number(), z.boolean()]),
 });
 

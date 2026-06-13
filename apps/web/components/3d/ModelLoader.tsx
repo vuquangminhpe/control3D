@@ -16,12 +16,25 @@ type ModelLoaderProps = {
   fitMaxSize?: number;
   groundToY?: number;
   markAsTerrain?: boolean;
+  onMetrics?: (metrics: ModelLoaderMetrics) => void;
   onMeshClick?: MeshClickHandler;
   onMeshPointerDown?: MeshPointerHandler;
   onMeshPointerUp?: MeshPointerHandler;
   onSceneReady?: (scene: THREE.Object3D | null) => void;
   src: string;
   wireframe?: boolean;
+};
+
+export type ModelLoaderMetrics = {
+  bounds: {
+    max: [number, number, number];
+    min: [number, number, number];
+    size: [number, number, number];
+  };
+  fitScale: number;
+  rawMaxSize: number;
+  rawHeight: number;
+  src: string;
 };
 
 type ModelDebugContext = {
@@ -92,7 +105,9 @@ function objectOrAncestorNameMatches(object: THREE.Object3D, root: THREE.Object3
 }
 
 function finiteBoundsTuple(vector: THREE.Vector3) {
-  return [vector.x, vector.y, vector.z].map((value) => Number(value.toFixed(4)));
+  return [vector.x, vector.y, vector.z].map((value) =>
+    Number(value.toFixed(4)),
+  ) as [number, number, number];
 }
 
 function objectTransformSnapshot(object: THREE.Object3D) {
@@ -334,7 +349,13 @@ function logLoadedModelPlacement(
 ) {
   if (!group) return;
   group.updateMatrixWorld(true);
-  const finalBounds = new THREE.Box3().setFromObject(group);
+  const localRenderableBounds = getRenderableBounds(scene, {
+    ...context,
+    phase: "final-placement-local-bounds",
+  });
+  const finalBounds = localRenderableBounds.isEmpty()
+    ? new THREE.Box3()
+    : localRenderableBounds.clone().applyMatrix4(group.matrixWorld);
   log3DDebug(
     `placement:${scene.uuid}:${fitScale}:${groundOffset}:${context.debugLabel ?? context.loader}`,
     "ModelLoader final placement",
@@ -346,6 +367,11 @@ function logLoadedModelPlacement(
       groundOffset,
       groupTransform: objectTransformSnapshot(group),
       sceneTransform: objectTransformSnapshot(scene),
+      localRenderableBounds: localRenderableBounds.isEmpty() ? null : {
+        min: finiteBoundsTuple(localRenderableBounds.min),
+        max: finiteBoundsTuple(localRenderableBounds.max),
+        size: finiteBoundsTuple(localRenderableBounds.getSize(new THREE.Vector3())),
+      },
       worldBounds: finalBounds.isEmpty() ? null : {
         min: finiteBoundsTuple(finalBounds.min),
         max: finiteBoundsTuple(finalBounds.max),
@@ -354,6 +380,31 @@ function logLoadedModelPlacement(
     },
     { once: true },
   );
+}
+
+function getModelLoaderMetrics(
+  scene: THREE.Object3D,
+  fitScale: number,
+  src: string,
+): ModelLoaderMetrics | null {
+  const bounds = getRenderableBounds(scene, {
+    loader: "metrics",
+    phase: "model-loader-metrics",
+    src,
+  });
+  if (bounds.isEmpty()) return null;
+  const size = bounds.getSize(new THREE.Vector3());
+  return {
+    bounds: {
+      min: finiteBoundsTuple(bounds.min),
+      max: finiteBoundsTuple(bounds.max),
+      size: finiteBoundsTuple(size),
+    },
+    fitScale,
+    rawMaxSize: Math.max(size.x, size.y, size.z),
+    rawHeight: size.y,
+    src,
+  };
 }
 
 function getGeometryFitScale(geometry: THREE.BufferGeometry, fitHeight?: number, fitMaxSize?: number) {
@@ -414,6 +465,7 @@ function LoadedObjModel({
   fitMaxSize,
   groundToY,
   markAsTerrain,
+  onMetrics,
   onMeshClick,
   onMeshPointerDown,
   onMeshPointerUp,
@@ -449,8 +501,10 @@ function LoadedObjModel({
 
   useEffect(() => {
     logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
+    const metrics = getModelLoaderMetrics(scene, fitScale, src);
+    if (metrics) onMetrics?.(metrics);
     onSceneReady?.(groupRef.current);
-  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onMetrics, onSceneReady, scene, src]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>
@@ -471,6 +525,7 @@ function GeometryModel({
   geometry,
   groundToY,
   markAsTerrain,
+  onMetrics,
   onMeshClick,
   onMeshPointerDown,
   onMeshPointerUp,
@@ -523,8 +578,24 @@ function GeometryModel({
         { once: true },
       );
     }
+    clonedGeometry.computeBoundingBox();
+    const bounds = clonedGeometry.boundingBox;
+    if (bounds) {
+      const size = bounds.getSize(new THREE.Vector3());
+      onMetrics?.({
+        bounds: {
+          min: finiteBoundsTuple(bounds.min),
+          max: finiteBoundsTuple(bounds.max),
+          size: finiteBoundsTuple(size),
+        },
+        fitScale,
+        rawMaxSize: Math.max(size.x, size.y, size.z),
+        rawHeight: size.y,
+        src,
+      });
+    }
     onSceneReady?.(meshRef.current);
-  }, [debugContext, fitScale, groundOffset, onSceneReady]);
+  }, [clonedGeometry, debugContext, fitScale, groundOffset, onMetrics, onSceneReady, src]);
 
   return (
     <mesh
@@ -560,6 +631,7 @@ function LoadedModel({
   fitMaxSize,
   groundToY,
   markAsTerrain,
+  onMetrics,
   onMeshClick,
   onMeshPointerDown,
   onMeshPointerUp,
@@ -597,8 +669,10 @@ function LoadedModel({
 
   useEffect(() => {
     logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
+    const metrics = getModelLoaderMetrics(scene, fitScale, src);
+    if (metrics) onMetrics?.(metrics);
     onSceneReady?.(groupRef.current);
-  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onMetrics, onSceneReady, scene, src]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>
@@ -618,6 +692,7 @@ function LoadedFbxModel({
   fitMaxSize,
   groundToY,
   markAsTerrain,
+  onMetrics,
   onMeshClick,
   onMeshPointerDown,
   onMeshPointerUp,
@@ -655,8 +730,10 @@ function LoadedFbxModel({
 
   useEffect(() => {
     logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
+    const metrics = getModelLoaderMetrics(scene, fitScale, src);
+    if (metrics) onMetrics?.(metrics);
     onSceneReady?.(groupRef.current);
-  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onMetrics, onSceneReady, scene, src]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>

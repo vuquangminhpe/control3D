@@ -47,7 +47,7 @@ export type PlacedObject = {
   scale: [number, number, number];
 };
 
-export type StoryVariableType = "string" | "number" | "boolean";
+export type StoryVariableType = "string" | "number" | "boolean" | "character";
 
 export type StoryVariable = {
   id: string;
@@ -80,6 +80,8 @@ export type StoryNode = {
   modelName?: string | null;
   fileUrl?: string | null;
   action?: string | null;
+  characterActionId?: string | null;
+  characterActionName?: string | null;
   condition?: string | null;
   currencyChange?: number | null;
   position: { x: number; y: number };
@@ -436,6 +438,8 @@ interface GameState {
   dialogueNode: DialogNode | null;
   runtimeVariables: Record<string, string | number | boolean>;
   mapScaleRatio: number;
+  activeGameplayActionUrl: string | null;
+  activeGameplayActionName: string | null;
 
   // Floating Damage Numbers
   floatingDamages: FloatingDamage[];
@@ -443,6 +447,7 @@ interface GameState {
   // Actions
   startGame: () => void;
   setMapScaleRatio: (ratio: number) => void;
+  setActiveGameplayAction: (url: string | null, name: string | null) => void;
   updatePlayerPosition: (pos: [number, number, number]) => void;
   updatePlayerVelocity: (vel: [number, number, number]) => void;
   setPlayerTargetMove: (target: [number, number, number] | null) => void;
@@ -663,6 +668,12 @@ function runGraphLogic(
     }
 
     if (currentNode.kind === "animation") {
+      if (currentNode.characterActionId || currentNode.animationName) {
+        variables.lastCharacterActionId = currentNode.characterActionId || currentNode.animationName;
+        variables.lastCharacterActionName = currentNode.characterActionName || currentNode.animationName || "";
+        variables.lastCharacterActionModelId = currentNode.modelId || "";
+        setVars({ ...variables });
+      }
       const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
       currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
       continue;
@@ -770,12 +781,19 @@ export const useGameStore = create<GameState>((set, get) => ({
   dialogueNode: null,
   runtimeVariables: {},
   mapScaleRatio: 1.0,
+  activeGameplayActionUrl: null,
+  activeGameplayActionName: null,
   
   floatingDamages: [],
 
   setMapScaleRatio: (ratio) => set((state) => (
     Math.abs(state.mapScaleRatio - ratio) < 0.001 ? state : { mapScaleRatio: ratio }
   )),
+
+  setActiveGameplayAction: (url, name) => set({
+    activeGameplayActionUrl: url,
+    activeGameplayActionName: name,
+  }),
 
   startGame: () => {
     set((state) => ({

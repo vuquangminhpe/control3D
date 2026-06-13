@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { useFBX, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { SkeletonUtils } from "three-stdlib";
 import { cloneMeshMaterial } from "@/lib/3d/materials";
 
 export function isGltfSource(src: string) {
@@ -27,7 +28,7 @@ export function preload3DModel(src: string) {
 }
 
 function cloneScene(scene: THREE.Object3D, wireframe: boolean) {
-  const cloned = scene.clone(true);
+  const cloned = SkeletonUtils.clone(scene);
   cloned.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) {
       return;

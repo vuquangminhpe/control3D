@@ -14,7 +14,6 @@ export function HUD() {
   const status = useGameStore((state) => state.status);
   const startGame = useGameStore((state) => state.startGame);
   const selectedWeapon = useGameStore((state) => state.selectedWeapon);
-  const activeLevel = useGameStore((state) => state.activeLevel);
   
   const hpPercent = Math.max((playerHp / playerMaxHp) * 100, 0);
   const xpPercent = Math.max((xp / nextLevelXp) * 100, 0);
@@ -68,51 +67,7 @@ export function HUD() {
         </div>
       )}
 
-      {/* 3. Controls Manual (Floating Sidebar) */}
-      <div className="controls-sidebar">
-        <h4>COMMAND MANUAL</h4>
-        <div className="control-item">
-          <span className="key">MAP</span>
-          <span>{activeLevel.name}</span>
-        </div>
-        <div className="control-item">
-          <span className="key">W</span>
-          <span className="key">A</span>
-          <span className="key">S</span>
-          <span className="key">D</span>
-          <span>Move Character</span>
-        </div>
-        <div className="control-item">
-          <span className="key mouse-l">Click</span>
-          <span>Rotate Camera</span>
-        </div>
-        <div className="control-item">
-          <span className="key mouse-r">RMB</span>
-          <span>Random Attack</span>
-        </div>
-        <div className="control-item">
-          <span className="key">J</span>
-          <span>Light Slash / Combo</span>
-        </div>
-        <div className="control-item">
-          <span className="key">Space</span>
-          <span>Jump</span>
-        </div>
-        <div className="control-item">
-          <span className="key">K</span>
-          <span>Heavy Kick (Finisher)</span>
-        </div>
-        <div className="control-item">
-          <span className="key">Shift</span>
-          <span>Shield Block (-75% Dmg)</span>
-        </div>
-        <div className="control-item">
-          <span className="key">E</span>
-          <span>Talk / Shop</span>
-        </div>
-      </div>
-
-      {/* 4. Game Status Screens (Defeat, Victory) */}
+      {/* 3. Game Status Screens (Defeat, Victory) */}
       {status === "game_over" && (
         <div className="game-status-screen defeat">
           <div className="status-box">
