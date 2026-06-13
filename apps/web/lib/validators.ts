@@ -38,7 +38,21 @@ const storyNodePositionSchema = z.object({
 
 export const storyNodeSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["start", "character", "dialogue", "choice", "event", "shop"]),
+  kind: z.enum([
+    "start",
+    "character",
+    "dialogue",
+    "choice",
+    "event",
+    "shop",
+    "condition",
+    "set_variable",
+    "random",
+    "delay",
+    "comment",
+    "bark",
+    "animation",
+  ]),
   title: z.string().min(1),
   text: z.string().default(""),
   modelId: z.string().nullable().optional(),
@@ -48,6 +62,15 @@ export const storyNodeSchema = z.object({
   condition: z.string().nullable().optional(),
   currencyChange: z.number().nullable().optional(),
   position: storyNodePositionSchema,
+  variableId: z.string().nullable().optional(),
+  variableValue: z.string().nullable().optional(),
+  variableOperator: z.string().nullable().optional(),
+  choices: z.array(z.string()).nullable().optional(),
+  delayDuration: z.number().nullable().optional(),
+  animationName: z.string().nullable().optional(),
+  conditionVariableId: z.string().nullable().optional(),
+  conditionOperator: z.string().nullable().optional(),
+  conditionValue: z.string().nullable().optional(),
 });
 
 export const storyEdgeSchema = z.object({
@@ -56,11 +79,21 @@ export const storyEdgeSchema = z.object({
   targetId: z.string().min(1),
   label: z.string().default(""),
   condition: z.string().nullable().optional(),
+  sourceHandle: z.string().nullable().optional(),
+  targetHandle: z.string().nullable().optional(),
+});
+
+export const storyVariableSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(["string", "number", "boolean"]),
+  defaultValue: z.union([z.string(), z.number(), z.boolean()]),
 });
 
 export const storyGraphSchema = z.object({
   nodes: z.array(storyNodeSchema),
   edges: z.array(storyEdgeSchema),
+  variables: z.array(storyVariableSchema).optional().default([]),
 }).default({
   nodes: [
     {
@@ -72,7 +105,9 @@ export const storyGraphSchema = z.object({
     },
   ],
   edges: [],
+  variables: [],
 });
+
 
 export const createLevelSchema = z.object({
   id: z.string().min(1).optional(),

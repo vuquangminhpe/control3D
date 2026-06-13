@@ -5,6 +5,8 @@ import { Canvas, type ThreeEvent } from "@react-three/fiber";
 import { Grid, Html, OrbitControls, TransformControls } from "@react-three/drei";
 import * as THREE from "three";
 import { ModelLoader } from "@/components/3d/ModelLoader";
+import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
+import { StoryGraphPanel } from "./StoryGraphPanel";
 import { DialogueSystem } from "./DialogueSystem";
 import { GameCanvas } from "./GameCanvas";
 import { HUD } from "./HUD";
@@ -25,7 +27,7 @@ import {
   type WeaponType,
 } from "@/store/gameStore";
 
-type WorkbenchTab = "play" | "maps" | "editor";
+type WorkbenchTab = "play" | "maps" | "editor" | "story";
 type PlacementTool = "player" | "object";
 type EditableLevelDraft = ReturnType<typeof buildEditableLevel>;
 type AssetLibraryItem = {
@@ -55,7 +57,9 @@ const EMPTY_STORY_GRAPH: StoryGraph = {
     },
   ],
   edges: [],
+  variables: [],
 };
+
 
 type MapRelativeScale = {
   characterHeight: number;
@@ -114,6 +118,7 @@ function normalizeStoryGraph(graph?: StoryGraph | null): StoryGraph {
     return {
       nodes: EMPTY_STORY_GRAPH.nodes.map((node) => ({ ...node, position: { ...node.position } })),
       edges: [],
+      variables: [],
     };
   }
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
@@ -127,6 +132,7 @@ function normalizeStoryGraph(graph?: StoryGraph | null): StoryGraph {
       },
     })),
     edges: (graph.edges ?? []).filter((edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId)),
+    variables: graph.variables || [],
   };
 }
 
@@ -171,6 +177,12 @@ function BuilderModelViewer({
   interactive?: boolean;
   src: string;
 }) {
+  const [modelRoot, setModelRoot] = useState<THREE.Object3D | null>(null);
+  const controlsRef = useRef<any>(null);
+
+  // Import ThumbnailAutoFit helper dynamically/inline or from ModelLoader
+  const { ThumbnailAutoFit } = require("@/components/3d/ModelLoader");
+
   return (
     <div className={`builder-model-viewer${compact ? " compact" : ""}`}>
       <Canvas camera={{ position: [1.8, 1.25, 2.4], fov: 36 }} dpr={[1, compact ? 1 : 1.5]} frameloop="demand">
@@ -178,34 +190,32 @@ function BuilderModelViewer({
         <ambientLight intensity={0.85} />
         <directionalLight intensity={1.9} position={[3, 4, 3]} />
         <Suspense fallback={null}>
-          <ModelLoader fitHeight={fitHeight} fitMaxSize={fitMaxSize} groundToY={0} src={src} />
+          <ModelLoader fitHeight={fitHeight} fitMaxSize={fitMaxSize} groundToY={0} src={src} onSceneReady={setModelRoot} />
         </Suspense>
-        <OrbitControls enablePan={false} enableZoom={interactive} enableRotate={interactive} makeDefault />
+        <ThumbnailAutoFit controlsRef={controlsRef} model={modelRoot} />
+        <OrbitControls ref={controlsRef} enablePan={false} enableZoom={interactive} enableRotate={interactive} makeDefault />
       </Canvas>
     </div>
   );
 }
 
+
 function groundMarkerPosition(position: [number, number, number], offset: number): [number, number, number] {
   return [position[0], Number((position[1] - offset).toFixed(2)), position[2]];
 }
 
-function clampScale(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getMapRelativeScale(mapObject: THREE.Object3D | null): MapRelativeScale {
   if (!mapObject) return DEFAULT_MAP_RELATIVE_SCALE;
-  mapObject.updateMatrixWorld(true);
-  const bounds = new THREE.Box3().setFromObject(mapObject);
-  if (bounds.isEmpty()) return DEFAULT_MAP_RELATIVE_SCALE;
-  const size = bounds.getSize(new THREE.Vector3());
-  const mapSpan = Math.max(size.x, size.z, 1);
-  const characterHeight = clampScale(mapSpan * 0.02, 1.15, 2.05);
-  return {
-    characterHeight,
-    objectMaxSize: clampScale(mapSpan * 0.018, 0.7, 2.2),
+  const scaleRatio = mapObject.scale.x;
+  const scale = {
+    characterHeight: 1.85 * scaleRatio,
+    objectMaxSize: 1.8 * scaleRatio,
   };
+  console.log("[antigravity-debug] getMapRelativeScale:", {
+    scaleRatio,
+    scale
+  });
+  return scale;
 }
 
 function getObjectBounds(object: THREE.Object3D | null) {
@@ -299,6 +309,8 @@ function PlacedObjectMarker({
     });
   };
 
+  const adjustedSize = fitMaxSize * getIntelligentScaleMultiplier(object.name);
+
   return (
     <>
       <group
@@ -312,16 +324,17 @@ function PlacedObjectMarker({
         }}
       >
         <Suspense fallback={null}>
-          <ModelLoader fitMaxSize={fitMaxSize} groundToY={0} src={object.fileUrl} />
+          <ModelLoader fitMaxSize={adjustedSize} groundToY={0} src={object.fileUrl} />
         </Suspense>
         {selected ? (
           <mesh>
-            <boxGeometry args={[fitMaxSize, fitMaxSize, fitMaxSize]} />
+            <boxGeometry args={[adjustedSize, adjustedSize, adjustedSize]} />
             <meshBasicMaterial color="#00ffc4" wireframe transparent opacity={0.7} />
           </mesh>
         ) : null}
         <MarkerLabel>{object.name}</MarkerLabel>
       </group>
+
       {selected && groupRef.current ? (
         <TransformControls object={groupRef.current} mode="translate" onMouseUp={commitTransform} />
       ) : null}
@@ -343,6 +356,11 @@ function LevelBuilderViewport({
   setSelectedAssetId: Dispatch<SetStateAction<string>>;
 }) {
   const [placementTool, setPlacementTool] = useState<PlacementTool>("player");
+  console.log("[antigravity-debug] LevelBuilderViewport render:", {
+    mapModelUrl: draft.mapModelUrl,
+    playerCharacterUrl: draft.playerCharacter?.fileUrl,
+    placedObjectsCount: draft.placedObjects.length
+  });
   const [selectedCoreId, setSelectedCoreId] = useState<"player" | "">("");
   const [selectedObjectId, setSelectedObjectId] = useState<string>("");
   const [mapRelativeScale, setMapRelativeScale] = useState<MapRelativeScale>(DEFAULT_MAP_RELATIVE_SCALE);
@@ -350,7 +368,8 @@ function LevelBuilderViewport({
   const terrainRaycasterRef = useRef(new THREE.Raycaster());
   const lastTerrainSnapKeyRef = useRef("");
   const lastMapSeedUrlRef = useRef("");
-  const playerSpawn = parseVector(draft.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET, 0];
+  const currentMapScale = draft.mapModelUrl ? (terrainObjectRef.current?.scale.x ?? 1.0) : 1.0;
+  const playerSpawn = parseVector(draft.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET * currentMapScale, 0];
   const selectedAsset = assetLibrary.find((asset) => asset.id === selectedAssetId);
   const characterAssets = assetLibrary.filter((asset) => asset.category === "character");
   const selectedPlayerCharacter = draft.playerCharacter;
@@ -404,9 +423,10 @@ function LevelBuilderViewport({
     const playerX = Number(center.x.toFixed(2));
     const playerZ = Number(center.z.toFixed(2));
     const playerGround = getTerrainYAt(scene, playerX, playerZ, center.y);
+    const mapScale = scene.scale.x;
     setDraft((current) => ({
       ...current,
-      playerSpawn: formatVector([playerX, playerGround + PLAYER_SPAWN_OFFSET, playerZ]),
+      playerSpawn: formatVector([playerX, playerGround + PLAYER_SPAWN_OFFSET * mapScale, playerZ]),
       zombieSpawns: [],
       placedObjects: [],
     }));
@@ -427,7 +447,7 @@ function LevelBuilderViewport({
 
     if (placementTool === "player") {
       if (!selectedPlayerCharacter?.fileUrl) return;
-      setDraft((current) => ({ ...current, playerSpawn: formatVector([x, terrainY + PLAYER_SPAWN_OFFSET, z]) }));
+      setDraft((current) => ({ ...current, playerSpawn: formatVector([x, terrainY + PLAYER_SPAWN_OFFSET * currentMapScale, z]) }));
       return;
     }
     if (placementTool === "object" && selectedAsset) {
@@ -480,11 +500,12 @@ function LevelBuilderViewport({
 
   const snapDraftToTerrain = () => {
     if (!terrainObjectRef.current) return;
+    const mapScale = terrainObjectRef.current.scale.x;
     setDraft((current) => {
-      const currentPlayerSpawn = parseVector(current.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET, 5];
+      const currentPlayerSpawn = parseVector(current.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET * mapScale, 5];
       return {
         ...current,
-        playerSpawn: formatVector(entityPosition(currentPlayerSpawn[0], currentPlayerSpawn[2], PLAYER_SPAWN_OFFSET, currentPlayerSpawn[1] - PLAYER_SPAWN_OFFSET)),
+        playerSpawn: formatVector(entityPosition(currentPlayerSpawn[0], currentPlayerSpawn[2], PLAYER_SPAWN_OFFSET * mapScale, currentPlayerSpawn[1] - PLAYER_SPAWN_OFFSET * mapScale)),
         placedObjects: current.placedObjects.map((object) => ({
           ...object,
           position: entityPosition(object.position[0], object.position[2], 0, object.position[1]),
@@ -649,6 +670,11 @@ function LevelBuilderViewport({
                   onSceneReady={(scene) => {
                     terrainObjectRef.current = scene;
                     const nextScale = getMapRelativeScale(scene);
+                    console.log("[antigravity-debug] Editor Terrain Loaded:", {
+                      sceneName: scene?.name,
+                      sceneScaleX: scene?.scale.x,
+                      nextScale
+                    });
                     setMapRelativeScale((current) =>
                       sameMapRelativeScale(current, nextScale) ? current : nextScale,
                     );
@@ -679,14 +705,14 @@ function LevelBuilderViewport({
               fitHeight={mapRelativeScale.characterHeight}
               modelSrc={selectedPlayerCharacter.fileUrl}
               onCommit={(position) => {
-                const snapped = entityPosition(position[0], position[2], PLAYER_SPAWN_OFFSET, position[1]);
+                const snapped = entityPosition(position[0], position[2], PLAYER_SPAWN_OFFSET * currentMapScale, position[1]);
                 setDraft((current) => ({ ...current, playerSpawn: formatVector(snapped) }));
               }}
               onSelect={() => {
                 setSelectedCoreId("player");
                 setSelectedObjectId("");
               }}
-              position={groundMarkerPosition(playerSpawn, PLAYER_SPAWN_OFFSET)}
+              position={groundMarkerPosition(playerSpawn, PLAYER_SPAWN_OFFSET * currentMapScale)}
               selected={selectedCoreId === "player"}
             />
           ) : null}
@@ -782,379 +808,28 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
   );
 }
 
-function createStoryId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
-function StoryGraphEditor({
+
+function LevelEditorPanel({
+  onPlay,
+  draft,
+  setDraft,
   assetLibrary,
-  graph,
-  onChange,
+  setAssetLibrary,
+  saveLevel,
 }: {
+  onPlay: () => void;
+  draft: EditableLevelDraft;
+  setDraft: Dispatch<SetStateAction<EditableLevelDraft>>;
   assetLibrary: AssetLibraryItem[];
-  graph: StoryGraph;
-  onChange: (graph: StoryGraph) => void;
+  setAssetLibrary: Dispatch<SetStateAction<AssetLibraryItem[]>>;
+  saveLevel: () => Promise<GameLevel | null>;
 }) {
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id ?? "");
-  const [selectedEdgeId, setSelectedEdgeId] = useState("");
-  const [connectingFrom, setConnectingFrom] = useState<string>("");
-  const characterAssets = assetLibrary.filter((asset) => asset.category === "character");
-  const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? graph.nodes[0] ?? null;
-  const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
-
-  useEffect(() => {
-    if (selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId)) return;
-    setSelectedNodeId(graph.nodes[0]?.id ?? "");
-  }, [graph.nodes, selectedNodeId]);
-
-  const updateNode = (nodeId: string, updates: Partial<StoryNode>) => {
-    onChange({
-      ...graph,
-      nodes: graph.nodes.map((node) => (node.id === nodeId ? { ...node, ...updates } : node)),
-    });
-  };
-
-  const updateEdge = (edgeId: string, updates: Partial<StoryEdge>) => {
-    onChange({
-      ...graph,
-      edges: graph.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...updates } : edge)),
-    });
-  };
-
-  const addNode = (kind: StoryNodeKind, asset?: AssetLibraryItem) => {
-    const id = createStoryId("story-node");
-    const index = graph.nodes.length;
-    const node: StoryNode = {
-      id,
-      kind,
-      title: asset?.name ?? (kind === "character" ? "Character" : kind[0].toUpperCase() + kind.slice(1)),
-      text: kind === "choice" ? "Player chooses a response." : "",
-      modelId: asset?.id ?? null,
-      modelName: asset?.name ?? null,
-      fileUrl: asset?.fileUrl ?? null,
-      action: kind === "shop" ? "trade" : kind === "event" ? "trigger" : null,
-      condition: null,
-      currencyChange: kind === "shop" ? 0 : null,
-      position: {
-        x: 120 + (index % 3) * 230,
-        y: 130 + Math.floor(index / 3) * 150,
-      },
-    };
-    onChange({ ...graph, nodes: [...graph.nodes, node] });
-    setSelectedNodeId(id);
-    setSelectedEdgeId("");
-  };
-
-  const deleteNode = (nodeId: string) => {
-    const node = graph.nodes.find((entry) => entry.id === nodeId);
-    if (!node || node.kind === "start") return;
-    const nodes = graph.nodes.filter((entry) => entry.id !== nodeId);
-    onChange({
-      nodes,
-      edges: graph.edges.filter((edge) => edge.sourceId !== nodeId && edge.targetId !== nodeId),
-    });
-    setSelectedNodeId(nodes[0]?.id ?? "");
-    setSelectedEdgeId("");
-  };
-
-  const deleteEdge = (edgeId: string) => {
-    onChange({ ...graph, edges: graph.edges.filter((edge) => edge.id !== edgeId) });
-    setSelectedEdgeId("");
-  };
-
-  const startDrag = (event: ReactPointerEvent, node: StoryNode) => {
-    if ((event.target as HTMLElement).closest("button, input, textarea, select")) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = node.position;
-    const onMove = (moveEvent: PointerEvent) => {
-      const nextPosition = {
-        x: Math.max(16, origin.x + moveEvent.clientX - startX),
-        y: Math.max(16, origin.y + moveEvent.clientY - startY),
-      };
-      updateNode(node.id, { position: nextPosition });
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
-
-  const connectTo = (targetId: string) => {
-    if (!connectingFrom || connectingFrom === targetId) {
-      setConnectingFrom(targetId);
-      return;
-    }
-    const exists = graph.edges.some((edge) => edge.sourceId === connectingFrom && edge.targetId === targetId);
-    if (!exists) {
-      const edge: StoryEdge = {
-        id: createStoryId("story-edge"),
-        sourceId: connectingFrom,
-        targetId,
-        label: "Next",
-        condition: null,
-      };
-      onChange({ ...graph, edges: [...graph.edges, edge] });
-      setSelectedEdgeId(edge.id);
-    }
-    setConnectingFrom("");
-  };
-
-  const assignCharacter = (assetId: string) => {
-    if (!selectedNode) return;
-    const asset = characterAssets.find((entry) => entry.id === assetId);
-    updateNode(selectedNode.id, {
-      kind: asset ? "character" : selectedNode.kind,
-      modelId: asset?.id ?? null,
-      modelName: asset?.name ?? null,
-      fileUrl: asset?.fileUrl ?? null,
-      title: asset?.name ?? selectedNode.title,
-    });
-  };
-
-  return (
-    <section className="story-graph-shell">
-      <header className="story-graph-header">
-        <div>
-          <span>NPC Story</span>
-          <strong>Story graph</strong>
-        </div>
-        <div className="story-graph-actions">
-          <button type="button" onClick={() => addNode("dialogue")}>Dialogue</button>
-          <button type="button" onClick={() => addNode("choice")}>Choice</button>
-          <button type="button" onClick={() => addNode("event")}>Event</button>
-          <button type="button" onClick={() => addNode("shop")}>Shop</button>
-        </div>
-      </header>
-
-      <div className="story-graph-layout">
-        <div className="story-graph-canvas" ref={canvasRef}>
-          <svg className="story-graph-edges" aria-hidden="true">
-            {graph.edges.map((edge) => {
-              const source = graph.nodes.find((node) => node.id === edge.sourceId);
-              const target = graph.nodes.find((node) => node.id === edge.targetId);
-              if (!source || !target) return null;
-              const start = { x: source.position.x + 188, y: source.position.y + 58 };
-              const end = { x: target.position.x, y: target.position.y + 58 };
-              const c1 = start.x + Math.max(70, (end.x - start.x) * 0.45);
-              const c2 = end.x - Math.max(70, (end.x - start.x) * 0.45);
-              return (
-                <g key={edge.id}>
-                  <path
-                    className={selectedEdgeId === edge.id ? "active" : ""}
-                    d={`M ${start.x} ${start.y} C ${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`}
-                    onClick={() => {
-                      setSelectedEdgeId(edge.id);
-                      setSelectedNodeId("");
-                    }}
-                  />
-                  <text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 8}>
-                    {edge.label || "Next"}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
-
-          {graph.nodes.map((node) => (
-            <article
-              className={`story-node ${node.kind}${selectedNode?.id === node.id ? " active" : ""}${connectingFrom === node.id ? " connecting" : ""}`}
-              key={node.id}
-              onClick={() => {
-                setSelectedNodeId(node.id);
-                setSelectedEdgeId("");
-              }}
-              onPointerDown={(event) => startDrag(event, node)}
-              style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
-            >
-              <button
-                aria-label={`Connect from ${node.title}`}
-                className="story-node-port out"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setConnectingFrom(node.id);
-                }}
-                type="button"
-              />
-              <button
-                aria-label={`Connect to ${node.title}`}
-                className="story-node-port in"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  connectTo(node.id);
-                }}
-                type="button"
-              />
-              <div className="story-node-preview">
-                {node.fileUrl ? (
-                  <BuilderModelViewer compact fitHeight={0.92} interactive={false} src={node.fileUrl} />
-                ) : (
-                  <span>{node.kind === "start" ? "START" : node.kind.toUpperCase()}</span>
-                )}
-              </div>
-              <div className="story-node-copy">
-                <small>{node.kind}</small>
-                <strong>{node.title}</strong>
-                <p>{node.text || node.action || "No content yet."}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <aside className="story-graph-inspector">
-          <div className="story-character-palette">
-            <strong>Characters</strong>
-            <div>
-              {characterAssets.map((asset) => (
-                <button key={asset.id} onClick={() => addNode("character", asset)} type="button">
-                  <BuilderModelViewer compact fitHeight={0.76} interactive={false} src={asset.fileUrl} />
-                  <span>{asset.name}</span>
-                </button>
-              ))}
-              {!characterAssets.length ? <p className="builder-empty-note">Upload characters to use them as story actors.</p> : null}
-            </div>
-          </div>
-
-          {selectedNode ? (
-            <div className="story-inspector-panel">
-              <header>
-                <span>Node</span>
-                <button disabled={selectedNode.kind === "start"} onClick={() => deleteNode(selectedNode.id)} type="button">
-                  Delete
-                </button>
-              </header>
-              <label>
-                Type
-                <select
-                  value={selectedNode.kind}
-                  onChange={(event) => updateNode(selectedNode.id, { kind: event.target.value as StoryNodeKind })}
-                >
-                  <option value="start">Start</option>
-                  <option value="character">Character</option>
-                  <option value="dialogue">Dialogue</option>
-                  <option value="choice">Choice</option>
-                  <option value="event">Event</option>
-                  <option value="shop">Shop</option>
-                </select>
-              </label>
-              <label>
-                Character
-                <select value={selectedNode.modelId ?? ""} onChange={(event) => assignCharacter(event.target.value)}>
-                  <option value="">No model</option>
-                  {characterAssets.map((asset) => (
-                    <option key={asset.id} value={asset.id}>{asset.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Title
-                <input value={selectedNode.title} onChange={(event) => updateNode(selectedNode.id, { title: event.target.value })} />
-              </label>
-              <label>
-                Text
-                <textarea value={selectedNode.text} onChange={(event) => updateNode(selectedNode.id, { text: event.target.value })} />
-              </label>
-              <label>
-                Action
-                <input value={selectedNode.action ?? ""} onChange={(event) => updateNode(selectedNode.id, { action: event.target.value })} placeholder="attack, talk, trade, trigger" />
-              </label>
-              <label>
-                Condition
-                <input value={selectedNode.condition ?? ""} onChange={(event) => updateNode(selectedNode.id, { condition: event.target.value })} placeholder="quest_complete, has_key" />
-              </label>
-              <label>
-                Currency change
-                <input
-                  type="number"
-                  value={selectedNode.currencyChange ?? 0}
-                  onChange={(event) => updateNode(selectedNode.id, { currencyChange: Number(event.target.value) })}
-                />
-              </label>
-            </div>
-          ) : selectedEdge ? (
-            <div className="story-inspector-panel">
-              <header>
-                <span>Connection</span>
-                <button onClick={() => deleteEdge(selectedEdge.id)} type="button">Delete</button>
-              </header>
-              <label>
-                Label
-                <input value={selectedEdge.label} onChange={(event) => updateEdge(selectedEdge.id, { label: event.target.value })} />
-              </label>
-              <label>
-                Condition
-                <input value={selectedEdge.condition ?? ""} onChange={(event) => updateEdge(selectedEdge.id, { condition: event.target.value })} />
-              </label>
-            </div>
-          ) : (
-            <p className="builder-empty-note">Select a node or connection.</p>
-          )}
-        </aside>
-      </div>
-    </section>
-  );
-}
-
-function LevelEditorPanel({ onPlay }: { onPlay: () => void }) {
-  const activeLevel = useGameStore((state) => state.activeLevel);
-  const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
-  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
-  const [draft, setDraft] = useState(() => buildEditableLevel(activeLevel));
-  const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [isUploadingMap, setIsUploadingMap] = useState(false);
   const [mapUploadError, setMapUploadError] = useState<string | null>(null);
+  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadAssets = () => fetch("/api/models", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload) => {
-        if (!cancelled && payload?.success && Array.isArray(payload.data)) {
-          setAssetLibrary(payload.data);
-        }
-      })
-      .catch(() => undefined);
-    void loadAssets();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    setDraft(buildEditableLevel(activeLevel));
-  }, [activeLevel]);
-
-  const saveLevel = async () => {
-    const playerSpawn = parseVector(draft.playerSpawn);
-    const robotSpawn = parseVector(draft.robotSpawn);
-    if (!playerSpawn || !robotSpawn || !draft.mapModelUrl.trim()) return null;
-
-    const levelId = draft.id === "empty-map" ? undefined : draft.id;
-    const saved = await saveCustomLevel({
-      id: levelId,
-      name: draft.name.trim() || "Custom Sector",
-      mapModelUrl: draft.mapModelUrl.trim() || DEFAULT_MAP_URL,
-      playerCharacter: draft.playerCharacter,
-      playerSpawn,
-      robotSpawn,
-      robotStory: draft.robotStory.trim(),
-      storyGraph: draft.storyGraph,
-      zombieSpawns: draft.zombieSpawns,
-      placedObjects: draft.placedObjects,
-    });
-    if (saved) {
-      setDraft(buildEditableLevel(saved));
-    }
-    return saved;
-  };
 
   const mapAssets = assetLibrary.filter((asset) => {
     const format = asset.format?.toLowerCase() ?? asset.fileUrl.split(".").pop()?.toLowerCase();
@@ -1230,11 +905,6 @@ function LevelEditorPanel({ onPlay }: { onPlay: () => void }) {
         setSelectedAssetId={setSelectedAssetId}
       />
 
-      <StoryGraphEditor
-        assetLibrary={assetLibrary}
-        graph={draft.storyGraph}
-        onChange={(storyGraph) => setDraft((current) => ({ ...current, storyGraph }))}
-      />
 
       <div className="editor-liquid-dock">
         <details className="editor-glass-section" open>
@@ -1528,15 +1198,69 @@ function AssetManagerPanel() {
 
 export function GameWorkbench() {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("maps");
+  console.log("[antigravity-debug] GameWorkbench mounting/rendering. ActiveTab is:", activeTab);
   const loadSavedLevels = useGameStore((state) => state.loadSavedLevels);
   const loadWeaponLoadouts = useGameStore((state) => state.loadWeaponLoadouts);
   const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const activeLevel = useGameStore((state) => state.activeLevel);
+
+  const [draft, setDraft] = useState<EditableLevelDraft | null>(null);
+  const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
 
   useEffect(() => {
     loadSavedLevels();
     loadWeaponLoadouts();
   }, [loadSavedLevels, loadWeaponLoadouts]);
+
+  useEffect(() => {
+    if (activeLevel) {
+      setDraft(buildEditableLevel(activeLevel));
+    } else {
+      setDraft(null);
+    }
+  }, [activeLevel]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAssets = () => fetch("/api/models", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!cancelled && payload?.success && Array.isArray(payload.data)) {
+          setAssetLibrary(payload.data);
+        }
+      })
+      .catch(() => undefined);
+    void loadAssets();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveLevel = async () => {
+    if (!draft) return null;
+    const playerSpawn = parseVector(draft.playerSpawn);
+    const robotSpawn = parseVector(draft.robotSpawn);
+    if (!playerSpawn || !robotSpawn || !draft.mapModelUrl.trim()) return null;
+
+    const levelId = draft.id === "empty-map" ? undefined : draft.id;
+    const saved = await saveCustomLevel({
+      id: levelId,
+      name: draft.name.trim() || "Custom Sector",
+      mapModelUrl: draft.mapModelUrl.trim() || DEFAULT_MAP_URL,
+      playerCharacter: draft.playerCharacter,
+      playerSpawn,
+      robotSpawn,
+      robotStory: draft.robotStory.trim(),
+      storyGraph: draft.storyGraph,
+      zombieSpawns: draft.zombieSpawns,
+      placedObjects: draft.placedObjects,
+    });
+    if (saved) {
+      setDraft(buildEditableLevel(saved));
+    }
+    return saved;
+  };
 
   const openPlay = () => {
     requestGameFullscreen();
@@ -1566,13 +1290,16 @@ export function GameWorkbench() {
     }
   };
 
+  const showStoryTab = !!draft;
+
   return (
-    <div className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}`}>
+    <div className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}${activeTab === "story" ? " game-container-story" : ""}`}>
       <nav className="game-workbench-nav">
         {[
           ["play", "Play Game"],
           ["maps", "All Games"],
           ["editor", "Map Editor"],
+          ...(showStoryTab ? [["story", "Story Graph"]] : []),
         ].map(([id, label]) => (
           <button
             className={activeTab === id ? "active" : ""}
@@ -1603,7 +1330,26 @@ export function GameWorkbench() {
         </>
       )}
       {activeTab === "maps" && <MapsPanel onNewMap={() => { void createNewMap(); }} onPlay={openPlay} />}
-      {activeTab === "editor" && <LevelEditorPanel onPlay={openPlay} />}
+      {activeTab === "editor" && draft && (
+        <LevelEditorPanel
+          onPlay={openPlay}
+          draft={draft}
+          setDraft={setDraft as any}
+          assetLibrary={assetLibrary}
+          setAssetLibrary={setAssetLibrary}
+          saveLevel={saveLevel}
+        />
+      )}
+      {activeTab === "story" && draft && (
+        <div style={{ height: "calc(100vh - 50px)" }}>
+          <StoryGraphPanel
+            assetLibrary={assetLibrary}
+            graph={draft.storyGraph}
+            onChange={(storyGraph) => setDraft((current) => current ? ({ ...current, storyGraph }) : null)}
+            onSave={saveLevel}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -145,7 +145,20 @@ export type ZombieSpawnRecord = {
   position: [number, number, number];
 };
 
-export type StoryNodeKind = "start" | "character" | "dialogue" | "choice" | "event" | "shop";
+export type StoryNodeKind =
+  | "start"
+  | "character"
+  | "dialogue"
+  | "choice"
+  | "event"
+  | "shop"
+  | "condition"
+  | "set_variable"
+  | "random"
+  | "delay"
+  | "comment"
+  | "bark"
+  | "animation";
 
 export type StoryNodeRecord = {
   id: string;

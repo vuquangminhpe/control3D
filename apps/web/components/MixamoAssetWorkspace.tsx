@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { Suspense, useEffect, useMemo, useState, useTransition, useRef } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
+import * as THREE from "three";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { InspectViewer } from "@/components/ModelViewer";
 import { RiggedAnimationPreview } from "@/components/RiggedAnimationPreview";
@@ -142,6 +143,12 @@ function writeCharacterActions(
 }
 
 function CharacterCardViewer({ src }: { src: string }) {
+  const [modelRoot, setModelRoot] = useState<THREE.Object3D | null>(null);
+  const controlsRef = useRef<any>(null);
+
+  // Import ThumbnailAutoFit dynamically
+  const { ThumbnailAutoFit } = require("@/components/3d/ModelLoader");
+
   return (
     <Canvas camera={{ position: [1.9, 1.25, 2.4], fov: 36 }} dpr={[1, 1.25]} frameloop="demand">
       <color attach="background" args={["#24313d"]} />
@@ -149,12 +156,14 @@ function CharacterCardViewer({ src }: { src: string }) {
       <directionalLight intensity={1.8} position={[3, 4, 3]} />
       <directionalLight intensity={0.45} position={[-3, 2, -2]} />
       <Suspense fallback={null}>
-        <ModelLoader fitHeight={1.55} groundToY={0} src={src} />
+        <ModelLoader fitHeight={1.55} groundToY={0} src={src} onSceneReady={setModelRoot} />
       </Suspense>
-      <OrbitControls autoRotate autoRotateSpeed={1.1} enablePan={false} enableRotate={false} enableZoom={false} makeDefault />
+      <ThumbnailAutoFit controlsRef={controlsRef} model={modelRoot} />
+      <OrbitControls ref={controlsRef} autoRotate autoRotateSpeed={1.1} enablePan={false} enableRotate={false} enableZoom={false} makeDefault />
     </Canvas>
   );
 }
+
 
 export function MixamoAssetWorkspace({
   animations,

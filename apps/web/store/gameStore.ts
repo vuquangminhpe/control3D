@@ -47,7 +47,29 @@ export type PlacedObject = {
   scale: [number, number, number];
 };
 
-export type StoryNodeKind = "start" | "character" | "dialogue" | "choice" | "event" | "shop";
+export type StoryVariableType = "string" | "number" | "boolean";
+
+export type StoryVariable = {
+  id: string;
+  name: string;
+  type: StoryVariableType;
+  defaultValue: string | number | boolean;
+};
+
+export type StoryNodeKind =
+  | "start"
+  | "character"
+  | "dialogue"
+  | "choice"
+  | "event"
+  | "shop"
+  | "condition"
+  | "set_variable"
+  | "random"
+  | "delay"
+  | "comment"
+  | "bark"
+  | "animation";
 
 export type StoryNode = {
   id: string;
@@ -61,6 +83,15 @@ export type StoryNode = {
   condition?: string | null;
   currencyChange?: number | null;
   position: { x: number; y: number };
+  variableId?: string | null;
+  variableValue?: string | null;
+  variableOperator?: string | null;
+  choices?: string[] | null;
+  delayDuration?: number | null;
+  animationName?: string | null;
+  conditionVariableId?: string | null;
+  conditionOperator?: string | null;
+  conditionValue?: string | null;
 };
 
 export type StoryEdge = {
@@ -69,12 +100,16 @@ export type StoryEdge = {
   targetId: string;
   label: string;
   condition?: string | null;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
 };
 
 export type StoryGraph = {
   nodes: StoryNode[];
   edges: StoryEdge[];
+  variables?: StoryVariable[];
 };
+
 
 export type LevelCharacter = {
   modelId: string;
@@ -142,6 +177,11 @@ export type DialogNode = {
   id: string;
   text: string;
   options: DialogOption[];
+  speakerName?: string;
+  speakerSub?: string;
+  isDelay?: boolean;
+  delayDuration?: number;
+  nextNodeId?: string;
 };
 
 const PLAYER_SPAWN_POSITION: [number, number, number] = [0, 1.5, 0];
@@ -168,7 +208,9 @@ const EMPTY_STORY_GRAPH: StoryGraph = {
     },
   ],
   edges: [],
+  variables: [],
 };
+
 
 export const weaponCatalog: Record<WeaponType, { label: string; cost: number; description: string }> = {
   sword: {
@@ -392,12 +434,15 @@ interface GameState {
   savedLevels: GameLevel[];
   activeDialogueNpcId: string | null;
   dialogueNode: DialogNode | null;
+  runtimeVariables: Record<string, string | number | boolean>;
+  mapScaleRatio: number;
 
   // Floating Damage Numbers
   floatingDamages: FloatingDamage[];
 
   // Actions
   startGame: () => void;
+  setMapScaleRatio: (ratio: number) => void;
   updatePlayerPosition: (pos: [number, number, number]) => void;
   updatePlayerVelocity: (vel: [number, number, number]) => void;
   setPlayerTargetMove: (target: [number, number, number] | null) => void;
@@ -500,6 +545,200 @@ const robotDialogueTree: Record<string, DialogNode> = {
   },
 };
 
+function runGraphLogic(
+  nodeId: string,
+  variables: Record<string, any>,
+  graph: StoryGraph,
+  setVars: (v: Record<string, any>) => void,
+  purchaseItem: (item: WeaponType) => boolean,
+  equipWeapon: (weapon: WeaponType) => void,
+  ownedWeapons: WeaponType[],
+  score: number,
+  get: () => GameState,
+  set: (s: Partial<GameState>) => void
+): DialogNode | null {
+  let currentNode = graph.nodes.find((n) => n.id === nodeId);
+  if (!currentNode) return null;
+
+  let speakerName = "";
+  let speakerSub = "";
+
+  let safetyCounter = 0;
+  while (currentNode && safetyCounter < 100) {
+    safetyCounter++;
+
+    if (currentNode.kind === "start") {
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "character") {
+      speakerName = currentNode.modelName || currentNode.title || "";
+      speakerSub = "NPC SPEAKER";
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "comment") {
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "set_variable" && currentNode.variableId) {
+      const varName = currentNode.variableId;
+      let val: any = currentNode.variableValue ?? "";
+      const varDef = graph.variables?.find((v) => v.name === varName);
+      if (varDef) {
+        if (varDef.type === "number") val = Number(val) || 0;
+        if (varDef.type === "boolean") val = val === "true" || val === "1" || val === true;
+      }
+
+      const op = currentNode.variableOperator || "set";
+      if (op === "add" && typeof val === "number") {
+        variables[varName] = (Number(variables[varName]) || 0) + val;
+      } else if (op === "sub" && typeof val === "number") {
+        variables[varName] = (Number(variables[varName]) || 0) - val;
+      } else {
+        variables[varName] = val;
+      }
+      setVars({ ...variables });
+
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "condition" && currentNode.conditionVariableId) {
+      const val = variables[currentNode.conditionVariableId];
+      const op = currentNode.conditionOperator || "==";
+      let checkVal: any = currentNode.conditionValue ?? "";
+      const varDef = graph.variables?.find((v) => v.name === currentNode!.conditionVariableId);
+      if (varDef) {
+        if (varDef.type === "number") checkVal = Number(checkVal) || 0;
+        if (varDef.type === "boolean") checkVal = checkVal === "true" || checkVal === "1" || checkVal === true;
+      }
+
+      let isTrue = false;
+      if (op === "==") isTrue = val === checkVal;
+      else if (op === "!=") isTrue = val !== checkVal;
+      else if (op === ">") isTrue = val > checkVal;
+      else if (op === "<") isTrue = val < checkVal;
+      else if (op === ">=") isTrue = val >= checkVal;
+      else if (op === "<=") isTrue = val <= checkVal;
+
+      const matchHandle = isTrue ? "true" : "false";
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id && e.sourceHandle === matchHandle);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "random") {
+      const outlets = graph.edges.filter((e) => e.sourceId === currentNode!.id);
+      if (outlets.length > 0) {
+        const randIndex = Math.floor(Math.random() * outlets.length);
+        currentNode = graph.nodes.find((n) => n.id === outlets[randIndex].targetId);
+      } else {
+        currentNode = undefined;
+      }
+      continue;
+    }
+
+    if (currentNode.kind === "event" && currentNode.action) {
+      const action = currentNode.action;
+      if (action === "heal_player") {
+        set({ playerHp: get().playerMaxHp });
+      } else if (action === "give_score_100") {
+        set({ score: get().score + 100 });
+      } else if (action === "spawn_zombies") {
+        get().spawnEnemies();
+      } else if (action === "complete_level") {
+        set({ status: "victory" });
+      }
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    if (currentNode.kind === "animation") {
+      const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+      currentNode = edge ? graph.nodes.find((n) => n.id === edge.targetId) : undefined;
+      continue;
+    }
+
+    break;
+  }
+
+  if (!currentNode) return null;
+
+  if (currentNode.kind === "delay") {
+    return {
+      id: currentNode.id,
+      text: `Waiting for ${currentNode.delayDuration || 1} seconds...`,
+      options: [],
+      speakerName: speakerName || "SYSTEM",
+      speakerSub: "TIMED DELAY GATE",
+      isDelay: true,
+      delayDuration: currentNode.delayDuration || 1,
+      nextNodeId: graph.edges.find((e) => e.sourceId === currentNode!.id)?.targetId || "exit",
+    };
+  }
+
+  let text = currentNode.text || "";
+
+  if (currentNode.kind === "shop") {
+    text = text || "Gear Shop: Trade score for weapons.";
+    return {
+      id: "shop",
+      text,
+      speakerName: speakerName || "GEAR SHOP",
+      speakerSub: "AUTOMATED MERCHANT",
+      options: [
+        { text: "Buy bow - 200 score", nextNodeId: "buy_bow" },
+        { text: "Buy greatsword - 450 score", nextNodeId: "buy_greatsword" },
+        { text: "Equip bow", nextNodeId: "equip_bow" },
+        { text: "Equip sword", nextNodeId: "equip_sword" },
+        { text: "Equip greatsword", nextNodeId: "equip_greatsword" },
+        {
+          text: "Back",
+          nextNodeId: graph.edges.find((e) => e.sourceId === currentNode!.id)?.targetId || "exit",
+        },
+      ],
+    };
+  }
+
+  const options: DialogOption[] = [];
+  if (currentNode.kind === "choice") {
+    const choices = currentNode.choices || ["Next"];
+    choices.forEach((choiceText, idx) => {
+      const edge = graph.edges.find(
+        (e) => e.sourceId === currentNode!.id && e.sourceHandle === `choice-${idx}`
+      );
+      options.push({
+        text: choiceText,
+        nextNodeId: edge ? edge.targetId : "exit",
+      });
+    });
+  } else {
+    const edge = graph.edges.find((e) => e.sourceId === currentNode!.id);
+    if (edge) {
+      options.push({
+        text: edge.label || "Continue",
+        nextNodeId: edge.targetId,
+      });
+    }
+  }
+
+  return {
+    id: currentNode.id,
+    text,
+    options,
+    ...(speakerName ? { speakerName, speakerSub } : {}),
+  };
+}
+
 export const useGameStore = create<GameState>((set, get) => ({
   status: "playing",
   score: 0,
@@ -529,8 +768,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   savedLevels: [],
   activeDialogueNpcId: null,
   dialogueNode: null,
+  runtimeVariables: {},
+  mapScaleRatio: 1.0,
   
   floatingDamages: [],
+
+  setMapScaleRatio: (ratio) => set({ mapScaleRatio: ratio }),
 
   startGame: () => {
     set((state) => ({
@@ -549,6 +792,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       robotPosition: [...state.activeLevel.robotSpawn],
       activeDialogueNpcId: null,
       dialogueNode: null,
+      runtimeVariables: {},
       floatingDamages: [],
       bowAim: EMPTY_BOW_AIM,
       bowFireHeld: false,
@@ -863,13 +1107,59 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   startDialogue: (npcId) => {
+    const activeLevel = get().activeLevel;
+    const graph = activeLevel.storyGraph;
+    if (graph && graph.nodes && graph.nodes.length > 1) {
+      const startNode = graph.nodes.find((n) => n.kind === "start");
+      if (startNode) {
+        const edge = graph.edges.find((e) => e.sourceId === startNode.id);
+        const firstNodeId = edge ? edge.targetId : "exit";
+
+        const initialVars = { ...get().runtimeVariables };
+        if (graph.variables) {
+          graph.variables.forEach((v) => {
+            if (initialVars[v.name] === undefined) {
+              initialVars[v.name] = v.defaultValue;
+            }
+          });
+        }
+
+        const nextDialogue = runGraphLogic(
+          firstNodeId,
+          initialVars,
+          graph,
+          (updatedVars) => {
+            set({ runtimeVariables: updatedVars });
+          },
+          get().purchaseItem,
+          get().equipWeapon,
+          get().ownedWeapons,
+          get().score,
+          get,
+          set
+        );
+
+        if (nextDialogue) {
+          set({
+            activeDialogueNpcId: npcId,
+            dialogueNode: nextDialogue,
+            playerTargetMove: null,
+            isPlayerAttacking: false,
+            comboCount: 0,
+            runtimeVariables: initialVars,
+          });
+          return;
+        }
+      }
+    }
+
     set({
       activeDialogueNpcId: npcId,
       dialogueNode: {
         ...robotDialogueTree.start,
         text: `${robotDialogueTree.start.text} ${get().activeLevel.robotStory}`,
       },
-      playerTargetMove: null, // Stop player walking when starting dialogue
+      playerTargetMove: null,
       isPlayerAttacking: false,
       comboCount: 0,
     });
@@ -880,6 +1170,69 @@ export const useGameStore = create<GameState>((set, get) => ({
       get().closeDialogue();
       return;
     }
+
+    const activeLevel = get().activeLevel;
+    const graph = activeLevel.storyGraph;
+    if (graph && graph.nodes && graph.nodes.length > 1) {
+      if (nextNodeId === "buy_bow" || nextNodeId === "buy_greatsword") {
+        const item = nextNodeId === "buy_bow" ? "bow" : "greatsword";
+        const ok = get().purchaseItem(item);
+        set({
+          dialogueNode: {
+            id: nextNodeId,
+            text: ok ? `${item} purchased and equipped.` : "Not enough score for that item.",
+            options: [
+              {
+                text: "Continue",
+                nextNodeId: graph.edges.find((e) => e.sourceId === "shop")?.targetId || "exit",
+              }
+            ],
+          },
+        });
+        return;
+      }
+      if (nextNodeId === "equip_sword" || nextNodeId === "equip_bow" || nextNodeId === "equip_greatsword") {
+        const weapon = nextNodeId.replace("equip_", "") as WeaponType;
+        const owned = get().ownedWeapons.includes(weapon);
+        if (owned) get().equipWeapon(weapon);
+        set({
+          dialogueNode: {
+            id: nextNodeId,
+            text: owned ? `${weapon} equipped.` : `You do not own ${weapon} yet.`,
+            options: [
+              {
+                text: "Continue",
+                nextNodeId: graph.edges.find((e) => e.sourceId === "shop")?.targetId || "exit",
+              }
+            ],
+          },
+        });
+        return;
+      }
+
+      const nextDialogue = runGraphLogic(
+        nextNodeId,
+        { ...get().runtimeVariables },
+        graph,
+        (updatedVars) => {
+          set({ runtimeVariables: updatedVars });
+        },
+        get().purchaseItem,
+        get().equipWeapon,
+        get().ownedWeapons,
+        get().score,
+        get,
+        set
+      );
+
+      if (nextDialogue) {
+        set({ dialogueNode: nextDialogue });
+      } else {
+        get().closeDialogue();
+      }
+      return;
+    }
+
     if (nextNodeId === "buy_bow" || nextNodeId === "buy_greatsword") {
       const item = nextNodeId === "buy_bow" ? "bow" : "greatsword";
       const ok = get().purchaseItem(item);

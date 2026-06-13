@@ -15,22 +15,32 @@ const BOW_TRAJECTORY_STEPS = 28;
 const BOW_TRAJECTORY_STEP_SECONDS = 0.075;
 
 function CustomPlayerVisual({ src }: { src: string }) {
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+  const fitHeight = 1.85 * mapScaleRatio;
+  const posY = -1.5 * mapScaleRatio;
+  console.log("[antigravity-debug] CustomPlayerVisual rendering:", {
+    src,
+    mapScaleRatio,
+    fitHeight,
+    posY
+  });
   return (
-    <group position={[0, -1.5, 0]}>
+    <group position={[0, posY, 0]}>
       <Suspense fallback={null}>
-        <ModelLoader fitHeight={1.85} groundToY={0} src={src} />
+        <ModelLoader fitHeight={fitHeight} groundToY={0} src={src} />
       </Suspense>
     </group>
   );
 }
 
-function buildBowTrajectory(origin: THREE.Vector3, velocity: THREE.Vector3): [number, number, number][] {
+function buildBowTrajectory(origin: THREE.Vector3, velocity: THREE.Vector3, mapScaleRatio: number): [number, number, number][] {
   const points: [number, number, number][] = [];
+  const gravity = BOW_GRAVITY * mapScaleRatio;
   for (let i = 0; i < BOW_TRAJECTORY_STEPS; i += 1) {
     const t = i * BOW_TRAJECTORY_STEP_SECONDS;
     points.push([
       Number((origin.x + velocity.x * t).toFixed(3)),
-      Number((origin.y + velocity.y * t + 0.5 * BOW_GRAVITY * t * t).toFixed(3)),
+      Number((origin.y + velocity.y * t + 0.5 * gravity * t * t).toFixed(3)),
       Number((origin.z + velocity.z * t).toFixed(3)),
     ]);
   }
@@ -55,6 +65,7 @@ export function Player() {
   const clearBowAim = useGameStore((state) => state.clearBowAim);
   const spawnArrow = useGameStore((state) => state.spawnArrow);
   const playerCharacter = useGameStore((state) => state.activeLevel.playerCharacter);
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
 
   // Local movement states
   const [keys, setKeys] = useState({ w: false, a: false, s: false, d: false, Shift: false });
@@ -92,7 +103,7 @@ export function Player() {
   const previousBowFireHeldRef = useRef(false);
 
   // Speed configuration
-  const speed = 7;
+  const speed = 7 * mapScaleRatio;
   const rotationSpeed = 10;
 
   const clearAttackRecoveryTimeout = useCallback(() => {
@@ -156,8 +167,8 @@ export function Player() {
     const currentVel = body.linvel();
     jumpActiveRef.current = true;
     setActionState("jump");
-    body.setLinvel({ x: currentVel.x, y: 6.8, z: currentVel.z }, true);
-  }, []);
+    body.setLinvel({ x: currentVel.x, y: 6.8 * mapScaleRatio, z: currentVel.z }, true);
+  }, [mapScaleRatio]);
 
   const startBowAim = useCallback(() => {
     const gameState = useGameStore.getState();
@@ -397,8 +408,8 @@ export function Player() {
       const distance = toEnemy.length();
       const directionToEnemy = distance > 0 ? toEnemy.clone().normalize() : toEnemy;
       const isInsideArc = weaponForward.dot(directionToEnemy) >= minFacingDot;
-      const targetRadius = enemy.type === "zombie_fantasy" ? 1.35 : 0.75;
-      const hitDistance = weaponHitbox.reach + weaponHitbox.radius + targetRadius;
+      const targetRadius = (enemy.type === "zombie_fantasy" ? 1.35 : 0.75) * mapScaleRatio;
+      const hitDistance = (weaponHitbox.reach + weaponHitbox.radius) * mapScaleRatio + targetRadius;
 
       if (isInsideArc && distance <= hitDistance && (!closestHit || distance < closestHit.distance)) {
         closestHit = {
@@ -418,9 +429,9 @@ export function Player() {
     const finalDamage = isCrit ? Math.floor(damage * 1.5) : damage;
 
     const floatPos: [number, number, number] = [
-      closestHit.position[0] + (Math.random() - 0.5) * 0.5,
-      closestHit.position[1] + 1.2,
-      closestHit.position[2] + (Math.random() - 0.5) * 0.5,
+      closestHit.position[0] + (Math.random() - 0.5) * 0.5 * mapScaleRatio,
+      closestHit.position[1] + 1.2 * mapScaleRatio,
+      closestHit.position[2] + (Math.random() - 0.5) * 0.5 * mapScaleRatio,
     ];
     hitEnemy(closestHit.enemyId, finalDamage, isCrit, floatPos);
   };
@@ -488,13 +499,13 @@ export function Player() {
           0,
           1,
         );
-        const speed = THREE.MathUtils.lerp(BOW_MIN_SPEED, BOW_MAX_SPEED, charge);
+        const speed = THREE.MathUtils.lerp(BOW_MIN_SPEED * mapScaleRatio, BOW_MAX_SPEED * mapScaleRatio, charge);
         const bowDirection = bowDirectionRef.current;
         camera.getWorldDirection(bowDirection).normalize();
         const bowOrigin = bowOriginRef.current
           .copy(playerVec3)
-          .addScaledVector(bowDirection, 0.9);
-        bowOrigin.y += 1.55;
+          .addScaledVector(bowDirection, 0.9 * mapScaleRatio);
+        bowOrigin.y += 1.55 * mapScaleRatio;
         const bowVelocity = bowVelocityRef.current.copy(bowDirection).multiplyScalar(speed);
         const flatDirection = bowFlatDirectionRef.current.copy(bowDirection).setY(0);
 
@@ -510,7 +521,7 @@ export function Player() {
           charge,
           origin: [bowOrigin.x, bowOrigin.y, bowOrigin.z],
           velocity: [bowVelocity.x, bowVelocity.y, bowVelocity.z],
-          trajectory: buildBowTrajectory(bowOrigin, bowVelocity),
+          trajectory: buildBowTrajectory(bowOrigin, bowVelocity, mapScaleRatio),
         });
 
         if (actionState !== "block") {
@@ -618,6 +629,14 @@ export function Player() {
     }
   });
 
+  console.log("[antigravity-debug] Player rendering:", {
+    mapScaleRatio,
+    initialPosition: initialPlayerPositionRef.current,
+    playerCharacter: playerCharacter?.fileUrl,
+    capsuleArgs: [0.7 * mapScaleRatio, 0.4 * mapScaleRatio],
+    capsulePos: [0, 1.1 * mapScaleRatio, 0]
+  });
+
   return (
     <RigidBody
       ref={rigidBodyRef}
@@ -628,10 +647,10 @@ export function Player() {
       type="dynamic"
       canSleep={false}
     >
-      <CapsuleCollider args={[0.7, 0.4]} position={[0, 1.1, 0]} />
+      <CapsuleCollider args={[0.7 * mapScaleRatio, 0.4 * mapScaleRatio]} position={[0, 1.1 * mapScaleRatio, 0]} />
       <CuboidCollider
-        args={[0.32, 0.08, 0.32]}
-        position={[0, 0.1, 0]}
+        args={[0.32 * mapScaleRatio, 0.08 * mapScaleRatio, 0.32 * mapScaleRatio]}
+        position={[0, 0.1 * mapScaleRatio, 0]}
         sensor
         onIntersectionEnter={() => {
           groundedContactsRef.current += 1;

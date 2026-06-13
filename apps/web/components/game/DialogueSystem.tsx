@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useGameStore, weaponCatalog, type WeaponType } from "@/store/gameStore";
 
 export function DialogueSystem() {
@@ -11,6 +12,16 @@ export function DialogueSystem() {
   const ownedWeapons = useGameStore((state) => state.ownedWeapons);
   const selectedWeapon = useGameStore((state) => state.selectedWeapon);
 
+  // Auto-advance delay nodes
+  useEffect(() => {
+    if (node && node.isDelay && node.nextNodeId) {
+      const timer = setTimeout(() => {
+        chooseOption(node.nextNodeId!);
+      }, (node.delayDuration || 1) * 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [node, chooseOption]);
+
   if (!activeNpcId || !node) return null;
 
   return (
@@ -19,8 +30,8 @@ export function DialogueSystem() {
         <div className="dialogue-header">
           <div className="avatar-indicator" />
           <div>
-            <h3>PATROL ROBOT</h3>
-            <span className="subtitle-indicator">ONLINE SECURITY SYSTEM</span>
+            <h3>{node.speakerName || "PATROL ROBOT"}</h3>
+            <span className="subtitle-indicator">{node.speakerSub || "ONLINE SECURITY SYSTEM"}</span>
           </div>
         </div>
         
@@ -60,9 +71,11 @@ export function DialogueSystem() {
             </button>
           ))}
           
-          <button className="dialogue-button close" onClick={closeDialogue}>
-            Exit Dialogue
-          </button>
+          {!node.isDelay && (
+            <button className="dialogue-button close" onClick={closeDialogue}>
+              Exit Dialogue
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useLoader, type ThreeEvent } from "@react-three/fiber";
+import { useLoader, useThree, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import { OBJLoader, PLYLoader, STLLoader } from "three-stdlib";
 import { isFbxSource, isGltfSource, use3DModel, useFbxModel } from "@/hooks/use3DModel";
@@ -51,41 +51,133 @@ export function getRenderableBounds(object: THREE.Object3D) {
   object.updateMatrixWorld(true);
   const bounds = new THREE.Box3();
   const localBounds = new THREE.Box3();
+  
+  const inverseRootMatrix = new THREE.Matrix4();
+  try {
+    inverseRootMatrix.copy(object.matrixWorld).invert();
+  } catch (e) {
+    inverseRootMatrix.identity();
+  }
+
+  const relativeMatrix = new THREE.Matrix4();
+
+  console.log("[antigravity-debug] getRenderableBounds root object:", {
+    name: object.name,
+    type: object.type,
+    scale: [object.scale.x, object.scale.y, object.scale.z]
+  });
+  
+  let meshCount = 0;
   object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh || child instanceof THREE.SkinnedMesh)) return;
+    const isMesh = child instanceof THREE.Mesh;
+    const isSkinnedMesh = child instanceof THREE.SkinnedMesh;
+    if (!isMesh && !isSkinnedMesh) return;
+    
+    meshCount++;
     const geometry = child.geometry;
-    if (!geometry) return;
+    if (!geometry) {
+      console.log(`[antigravity-debug]   child #${meshCount}: ${child.name} (${child.type}) has no geometry`);
+      return;
+    }
+    
     if (!geometry.boundingBox) geometry.computeBoundingBox();
-    if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) return;
-    child.updateMatrixWorld(true);
-    localBounds.copy(geometry.boundingBox).applyMatrix4(child.matrixWorld);
+    const bbox = geometry.boundingBox;
+    const isEmpty = !bbox || bbox.isEmpty();
+    
+    console.log(`[antigravity-debug]   child #${meshCount}: ${child.name} (${child.type})`, {
+      geometryBBoxEmpty: isEmpty,
+      geometryBBoxMin: bbox ? [bbox.min.x, bbox.min.y, bbox.min.z] : null,
+      geometryBBoxMax: bbox ? [bbox.max.x, bbox.max.y, bbox.max.z] : null,
+      childScale: [child.scale.x, child.scale.y, child.scale.z],
+      childMatrixWorldScale: new THREE.Vector3().setFromMatrixScale(child.matrixWorld).toArray()
+    });
+
+    if (isEmpty) return;
+
+    // Ignore skyboxes / oceans / water planes / fogs / helper grids & colliders
+    const name = (child.name || "").toLowerCase();
+    if (
+      name.includes("sky") ||
+      name.includes("dome") ||
+      name.includes("water") ||
+      name.includes("sea") ||
+      name.includes("ocean") ||
+      name.includes("fog") ||
+      name.includes("cloud") ||
+      name.includes("grid") ||
+      name.includes("helper") ||
+      name.includes("collision") ||
+      name.includes("collider") ||
+      name.includes("trigger")
+    ) {
+      console.log(`[antigravity-debug]   child #${meshCount}: IGNORED due to name filters`);
+      return;
+    }
+
+    relativeMatrix.multiplyMatrices(inverseRootMatrix, child.matrixWorld);
+    localBounds.copy(bbox).applyMatrix4(relativeMatrix);
     bounds.union(localBounds);
+    console.log(`[antigravity-debug]   child #${meshCount}: unioned relative bounds. Current bounds:`, {
+      min: [bounds.min.x, bounds.min.y, bounds.min.z],
+      max: [bounds.max.x, bounds.max.y, bounds.max.z]
+    });
   });
 
   if (bounds.isEmpty()) {
-    return new THREE.Box3().setFromObject(object);
+    const fallbackWorld = new THREE.Box3().setFromObject(object);
+    const fallbackLocal = fallbackWorld.clone().applyMatrix4(inverseRootMatrix);
+    console.log("[antigravity-debug] getRenderableBounds: bounds is empty! Fallback setFromObject (local):", {
+      min: [fallbackLocal.min.x, fallbackLocal.min.y, fallbackLocal.min.z],
+      max: [fallbackLocal.max.x, fallbackLocal.max.y, fallbackLocal.max.z]
+    });
+    return fallbackLocal;
   }
 
+  console.log("[antigravity-debug] getRenderableBounds returning final bounds:", {
+    min: [bounds.min.x, bounds.min.y, bounds.min.z],
+    max: [bounds.max.x, bounds.max.y, bounds.max.z]
+  });
   return bounds;
 }
 
 function getSceneFitScale(scene: THREE.Object3D, fitHeight?: number, fitMaxSize?: number) {
   if (fitHeight === undefined && fitMaxSize === undefined) return 1;
   const bounds = getRenderableBounds(scene);
-  if (bounds.isEmpty()) return 1;
-  const size = bounds.getSize(new THREE.Vector3());
-  if (fitHeight !== undefined && size.y > 0.0001) {
-    return fitHeight / size.y;
+  if (bounds.isEmpty()) {
+    console.log("[antigravity-debug] getSceneFitScale: bounds is empty!", { sceneName: scene.name, fitHeight, fitMaxSize });
+    return 1;
   }
-  const maxSize = Math.max(size.x, size.y, size.z);
-  return fitMaxSize !== undefined && maxSize > 0.0001 ? fitMaxSize / maxSize : 1;
+  const size = bounds.getSize(new THREE.Vector3());
+  let resScale = 1;
+  if (fitHeight !== undefined && size.y > 0.0001) {
+    resScale = fitHeight / size.y;
+  } else {
+    const maxSize = Math.max(size.x, size.y, size.z);
+    resScale = fitMaxSize !== undefined && maxSize > 0.0001 ? fitMaxSize / maxSize : 1;
+  }
+  console.log("[antigravity-debug] getSceneFitScale:", {
+    sceneName: scene.name,
+    fitHeight,
+    fitMaxSize,
+    size: [size.x, size.y, size.z],
+    resScale
+  });
+  return resScale;
 }
 
 function getScaledSceneGroundOffset(scene: THREE.Object3D, scale: number, groundToY?: number) {
   if (groundToY === undefined) return 0;
   const bounds = getRenderableBounds(scene);
   if (bounds.isEmpty()) return 0;
-  return groundToY - bounds.min.y * scale;
+  const offset = groundToY - bounds.min.y * scale;
+  console.log("[antigravity-debug] getScaledSceneGroundOffset:", {
+    sceneName: scene.name,
+    scale,
+    groundToY,
+    minY: bounds.min.y,
+    offset
+  });
+  return offset;
 }
 
 function getGeometryFitScale(geometry: THREE.BufferGeometry, fitHeight?: number, fitMaxSize?: number) {
@@ -362,4 +454,24 @@ export function ModelLoader(props: ModelLoaderProps) {
   }
 
   return <LoadedModel {...props} />;
+}
+
+export function ThumbnailAutoFit({
+  controlsRef,
+  model,
+}: {
+  controlsRef?: React.MutableRefObject<any> | null;
+  model: THREE.Object3D | null;
+}) {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera) || !model) return;
+    const controls = controlsRef ? controlsRef.current : null;
+    // We import fitThumbnailCamera dynamically or from the lib to avoid circular dependency
+    const { fitThumbnailCamera } = require("@/lib/3d/camera");
+    fitThumbnailCamera(camera, model, controls);
+  }, [camera, controlsRef, model]);
+
+  return null;
 }

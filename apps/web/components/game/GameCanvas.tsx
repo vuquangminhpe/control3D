@@ -12,9 +12,12 @@ import { Terrain } from "./Terrain";
 import { FloatingDamage, prewarmDamageTextures } from "./FloatingDamage";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { preload3DModel } from "@/hooks/use3DModel";
+import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 
 // Camera controller that tracks the player smoothly
 function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject<any> }) {
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+
   useFrame(() => {
     if (!controlsRef.current) return;
     const playerPosition = useGameStore.getState().playerPosition;
@@ -22,7 +25,7 @@ function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject
     // Smoothly lerp camera focus target to the player position
     const target = new THREE.Vector3(...playerPosition);
     // Offset target slightly upward to focus on player's chest/head
-    target.y += 1.2;
+    target.y += 1.2 * mapScaleRatio;
     controlsRef.current.target.lerp(target, 0.1);
     controlsRef.current.update();
   });
@@ -34,8 +37,8 @@ function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject
       enablePan={false}
       enableRotate
       dampingFactor={0.08}
-      minDistance={6}
-      maxDistance={24}
+      minDistance={6 * mapScaleRatio}
+      maxDistance={24 * mapScaleRatio}
       minPolarAngle={Math.PI / 3}
       maxPolarAngle={Math.PI / 2.15} // prevents camera from dipping below horizontal ground level
       mouseButtons={{
@@ -61,6 +64,7 @@ function getRuntimeTerrainY(terrain: THREE.Object3D, x: number, z: number, fallb
 
 function snapRuntimeToTerrain(terrain: THREE.Object3D) {
   useGameStore.setState((state) => {
+    const scaleRatio = state.mapScaleRatio;
     const snapEntity = (
       position: [number, number, number],
       heightOffset: number,
@@ -89,7 +93,7 @@ function snapRuntimeToTerrain(terrain: THREE.Object3D) {
 
     const activeLevel = {
       ...state.activeLevel,
-      playerSpawn: snapEntity(state.activeLevel.playerSpawn, 1.5),
+      playerSpawn: snapEntity(state.activeLevel.playerSpawn, 1.5 * scaleRatio),
       placedObjects: state.activeLevel.placedObjects.map((object) => ({
         ...object,
         position: snapObject(object.position),
@@ -127,7 +131,8 @@ function FloatingDamageLayer() {
 
 function PlacedObjectLayer() {
   const placedObjects = useGameStore((state) => state.activeLevel.placedObjects);
-  const placedObjectMaxSize = 1.8;
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+  const placedObjectMaxSize = 1.8 * mapScaleRatio;
 
   return (
     <>
@@ -142,7 +147,7 @@ function PlacedObjectLayer() {
           ]}
           scale={object.scale}
         >
-          <ModelLoader fitMaxSize={placedObjectMaxSize} groundToY={0} src={object.fileUrl} />
+          <ModelLoader fitMaxSize={placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)} groundToY={0} src={object.fileUrl} />
         </group>
       ))}
     </>
@@ -247,6 +252,7 @@ function ArrowProjectile({
   const enemyPositionRef = useRef(new THREE.Vector3());
   const arrowYAxisRef = useRef(new THREE.Vector3(0, 1, 0));
   const removedRef = useRef(false);
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const removeArrow = useGameStore((state) => state.removeArrow);
   const hitEnemy = useGameStore((state) => state.hitEnemy);
 
@@ -262,7 +268,7 @@ function ArrowProjectile({
     const dt = Math.min(delta, 0.045);
     const position = positionRef.current;
     const velocity = velocityRef.current;
-    velocity.y += -19.8 * dt;
+    velocity.y += -19.8 * mapScaleRatio * dt;
     position.addScaledVector(velocity, dt);
 
     groupRef.current.position.copy(position);
@@ -346,6 +352,7 @@ export function GameCanvas() {
   // Zustand state and actions
   const spawnEnemies = useGameStore((state) => state.spawnEnemies);
   const worldVersion = useGameStore((state) => state.worldVersion);
+  const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const activeLevelId = useGameStore((state) => state.activeLevel.id);
   const activeLevel = useGameStore((state) => state.activeLevel);
   const hasMap = Boolean(activeLevel.mapModelUrl);
@@ -413,7 +420,7 @@ export function GameCanvas() {
         <Environment preset="sunset" background={false} />
 
         <Suspense fallback={<Html center><div className="loading-spinner">Loading cyber assets...</div></Html>}>
-          <Physics gravity={[0, -19.8, 0]}>
+          <Physics gravity={[0, -19.8 * mapScaleRatio, 0]}>
             {/* Terrain Level */}
             {hasMap ? <Terrain onReady={handleTerrainReady} /> : null}
             {groundReady ? <PlacedObjectLayer /> : null}
