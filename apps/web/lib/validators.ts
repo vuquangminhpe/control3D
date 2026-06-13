@@ -31,14 +31,64 @@ export const zombieSpawnSchema = z.object({
   position: vector3Schema,
 });
 
+const storyNodePositionSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+});
+
+export const storyNodeSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["start", "character", "dialogue", "choice", "event", "shop"]),
+  title: z.string().min(1),
+  text: z.string().default(""),
+  modelId: z.string().nullable().optional(),
+  modelName: z.string().nullable().optional(),
+  fileUrl: z.string().nullable().optional(),
+  action: z.string().nullable().optional(),
+  condition: z.string().nullable().optional(),
+  currencyChange: z.number().nullable().optional(),
+  position: storyNodePositionSchema,
+});
+
+export const storyEdgeSchema = z.object({
+  id: z.string().min(1),
+  sourceId: z.string().min(1),
+  targetId: z.string().min(1),
+  label: z.string().default(""),
+  condition: z.string().nullable().optional(),
+});
+
+export const storyGraphSchema = z.object({
+  nodes: z.array(storyNodeSchema),
+  edges: z.array(storyEdgeSchema),
+}).default({
+  nodes: [
+    {
+      id: "story-start",
+      kind: "start",
+      title: "Start",
+      text: "Story begins here.",
+      position: { x: 96, y: 160 },
+    },
+  ],
+  edges: [],
+});
+
 export const createLevelSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
   mapModelUrl: z.string().min(1),
+  playerCharacter: z.object({
+    modelId: z.string().min(1),
+    name: z.string().min(1),
+    fileUrl: z.string().min(1),
+    format: z.string().optional(),
+  }).nullable().optional(),
   playerSpawn: vector3Schema,
   robotSpawn: vector3Schema,
   robotStory: z.string().default(""),
-  zombieSpawns: z.array(zombieSpawnSchema).min(1),
+  storyGraph: storyGraphSchema,
+  zombieSpawns: z.array(zombieSpawnSchema),
   placedObjects: z.array(z.object({
     id: z.string().min(1),
     modelId: z.string().min(1),

@@ -1,13 +1,29 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { useGLTF } from "@react-three/drei";
+import { useFBX, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { cloneMeshMaterial } from "@/lib/3d/materials";
 
 export function isGltfSource(src: string) {
   const normalized = src.split("?")[0].split("#").pop() ?? src;
   return normalized.endsWith(".glb") || normalized.endsWith(".gltf");
+}
+
+export function isFbxSource(src: string) {
+  const normalized = src.split("?")[0].split("#").pop() ?? src;
+  return normalized.endsWith(".fbx");
+}
+
+export function preload3DModel(src: string) {
+  const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
+  if (isGltfSource(src)) {
+    useGLTF.preload(src, dracoPath);
+    return;
+  }
+  if (isFbxSource(src)) {
+    useFBX.preload(src);
+  }
 }
 
 function cloneScene(scene: THREE.Object3D, wireframe: boolean) {
@@ -47,5 +63,21 @@ export function use3DModel(
   return useMemo(
     () => cloneScene(gltf.scene, options?.wireframe ?? false),
     [gltf.scene, options?.wireframe],
+  );
+}
+
+export function useFbxModel(
+  src: string,
+  options?: { wireframe?: boolean },
+) {
+  const scene = useFBX(src);
+
+  useEffect(() => {
+    useFBX.preload(src);
+  }, [src]);
+
+  return useMemo(
+    () => cloneScene(scene, options?.wireframe ?? false),
+    [scene, options?.wireframe],
   );
 }

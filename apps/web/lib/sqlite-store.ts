@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -9,7 +10,9 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { inflateRawSync } from "node:zlib";
 import { persistUploadWithDelivery } from "@/lib/model-optimization";
+import { inferInitialRiggingMetadata } from "@/lib/model-rigging";
 
 export type ModelCategory =
   | "architecture"
@@ -83,6 +86,57 @@ export type ModelVersionRecord = {
   createdAt: string;
 };
 
+export type AnimationSourceKind = "single" | "pack";
+export type AnimationFormat = "fbx" | "zip";
+
+export type AnimationActionRecord = {
+  id: string;
+  name: string;
+  sourcePath: string;
+};
+
+export type AnimationAssetRecord = {
+  id: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  sourceKind: AnimationSourceKind;
+  originalFilename: string;
+  format: AnimationFormat;
+  fileUrl: string;
+  fileSize: number;
+  actionCount: number;
+  actions: AnimationActionRecord[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CharacterActionTrigger = "none" | "attack" | "talk" | "move" | "custom";
+
+export type CharacterActionLinkRecord = {
+  id: string;
+  animationAssetId: string;
+  actionId: string;
+  name: string;
+  fileUrl: string;
+  sourceFilename: string;
+  sourceFormat: AnimationFormat;
+  sourcePath: string;
+  enabled: boolean;
+  trigger: CharacterActionTrigger;
+  keyBinding: string | null;
+  durationMs: number | null;
+  dialogueText: string | null;
+  targetModelId: string | null;
+};
+
+export type CharacterAnimationManifest = {
+  version: 1;
+  mode: "external_actions";
+  actions: CharacterActionLinkRecord[];
+  updatedAt: string;
+};
+
 export type EnemyType = "zombie_low" | "zombie_fantasy";
 
 export type ZombieSpawnRecord = {
@@ -91,13 +145,49 @@ export type ZombieSpawnRecord = {
   position: [number, number, number];
 };
 
+export type StoryNodeKind = "start" | "character" | "dialogue" | "choice" | "event" | "shop";
+
+export type StoryNodeRecord = {
+  id: string;
+  kind: StoryNodeKind;
+  title: string;
+  text: string;
+  modelId?: string | null;
+  modelName?: string | null;
+  fileUrl?: string | null;
+  action?: string | null;
+  condition?: string | null;
+  currencyChange?: number | null;
+  position: { x: number; y: number };
+};
+
+export type StoryEdgeRecord = {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  label: string;
+  condition?: string | null;
+};
+
+export type StoryGraphRecord = {
+  nodes: StoryNodeRecord[];
+  edges: StoryEdgeRecord[];
+};
+
 export type LevelRecord = {
   id: string;
   name: string;
   mapModelUrl: string;
+  playerCharacter: {
+    modelId: string;
+    name: string;
+    fileUrl: string;
+    format?: string;
+  } | null;
   playerSpawn: [number, number, number];
   robotSpawn: [number, number, number];
   robotStory: string;
+  storyGraph: StoryGraphRecord;
   zombieSpawns: ZombieSpawnRecord[];
   placedObjects: Array<{
     id: string;
@@ -118,7 +208,21 @@ const appRoot = existsSync(path.join(cwd, "app"))
   : path.join(cwd, "apps", "web");
 const dataDir = path.join(appRoot, "data");
 const publicUploadsDir = path.join(appRoot, "public", "uploads", "models");
+const publicAnimationsDir = path.join(appRoot, "public", "uploads", "animations");
 const dbPath = path.join(dataDir, "control3d.sqlite");
+
+const EMPTY_STORY_GRAPH: StoryGraphRecord = {
+  nodes: [
+    {
+      id: "story-start",
+      kind: "start",
+      title: "Start",
+      text: "Story begins here.",
+      position: { x: 96, y: 160 },
+    },
+  ],
+  edges: [],
+};
 
 type GlobalSqliteState = {
   control3dDb?: DatabaseSync;
@@ -129,6 +233,7 @@ const globalSqliteState = globalThis as typeof globalThis & GlobalSqliteState;
 
 mkdirSync(dataDir, { recursive: true });
 mkdirSync(publicUploadsDir, { recursive: true });
+mkdirSync(publicAnimationsDir, { recursive: true });
 
 const seedElementTypes: Array<
   Omit<ElementTypeRecord, "createdAt" | "updatedAt">
@@ -228,13 +333,31 @@ function initializeDb(database: DatabaseSync) {
       FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS animation_assets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      tags_json TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      format TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      action_count INTEGER NOT NULL DEFAULT 1,
+      actions_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS levels (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       map_model_url TEXT NOT NULL,
+      player_character_json TEXT,
       player_spawn_json TEXT NOT NULL,
       robot_spawn_json TEXT NOT NULL,
       robot_story TEXT NOT NULL,
+      story_graph_json TEXT NOT NULL DEFAULT '{"nodes":[{"id":"story-start","kind":"start","title":"Start","text":"Story begins here.","position":{"x":96,"y":160}}],"edges":[]}',
       zombie_spawns_json TEXT NOT NULL,
       placed_objects_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
@@ -244,6 +367,16 @@ function initializeDb(database: DatabaseSync) {
 
   try {
     database.exec("ALTER TABLE levels ADD COLUMN placed_objects_json TEXT NOT NULL DEFAULT '[]';");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN player_character_json TEXT;");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec(`ALTER TABLE levels ADD COLUMN story_graph_json TEXT NOT NULL DEFAULT '{"nodes":[{"id":"story-start","kind":"start","title":"Start","text":"Story begins here.","position":{"x":96,"y":160}}],"edges":[]}';`);
   } catch {
     // Column already exists.
   }
@@ -355,14 +488,34 @@ function mapVersion(row: Record<string, unknown>): ModelVersionRecord {
   };
 }
 
+function mapAnimationAsset(row: Record<string, unknown>): AnimationAssetRecord {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    description: row.description ? String(row.description) : null,
+    tags: parseJson(row.tags_json as string | null, []),
+    sourceKind: String(row.source_kind) as AnimationSourceKind,
+    originalFilename: String(row.original_filename),
+    format: String(row.format) as AnimationFormat,
+    fileUrl: String(row.file_url),
+    fileSize: Number(row.file_size),
+    actionCount: Number(row.action_count),
+    actions: parseJson(row.actions_json as string | null, []),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
 function mapLevel(row: Record<string, unknown>): LevelRecord {
   return {
     id: String(row.id),
     name: String(row.name),
     mapModelUrl: String(row.map_model_url),
+    playerCharacter: parseJson(row.player_character_json as string | null, null),
     playerSpawn: parseJson(row.player_spawn_json as string | null, [0, 1.5, 5]),
     robotSpawn: parseJson(row.robot_spawn_json as string | null, [-9, 1.2, 12]),
     robotStory: String(row.robot_story ?? ""),
+    storyGraph: parseJson(row.story_graph_json as string | null, EMPTY_STORY_GRAPH),
     zombieSpawns: parseJson(row.zombie_spawns_json as string | null, []),
     placedObjects: parseJson(row.placed_objects_json as string | null, []),
     createdAt: String(row.created_at),
@@ -398,6 +551,118 @@ export function getFormatFromFilename(filename: string): ModelFormat | null {
   const ext = path.extname(filename).replace(".", "").toLowerCase();
   const allowed = ["glb", "gltf", "obj", "fbx", "stl", "ply", "usdz"] as const;
   return allowed.includes(ext as ModelFormat) ? (ext as ModelFormat) : null;
+}
+
+export function getAnimationFormatFromFilename(filename: string): AnimationFormat | null {
+  const ext = path.extname(filename).replace(".", "").toLowerCase();
+  return ext === "fbx" || ext === "zip" ? ext : null;
+}
+
+function cleanAnimationName(input: string) {
+  return path
+    .basename(input, path.extname(input))
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function listFbxEntriesFromZip(buffer: Buffer) {
+  return listZipEntriesFromZip(buffer).filter((filename) => filename.toLowerCase().endsWith(".fbx"));
+}
+
+function listZipEntriesFromZip(buffer: Buffer) {
+  const entries: string[] = [];
+  let offset = 0;
+
+  while (offset <= buffer.length - 46) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      offset += 1;
+      continue;
+    }
+
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const fileNameStart = offset + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    if (fileNameEnd > buffer.length) break;
+
+    const filename = buffer.toString("utf8", fileNameStart, fileNameEnd);
+    if (filename && !filename.endsWith("/")) {
+      entries.push(filename);
+    }
+
+    offset = fileNameEnd + extraLength + commentLength;
+  }
+
+  return entries;
+}
+
+export function listBundleEntriesFromZip(buffer: Buffer) {
+  return listZipEntriesFromZip(buffer).filter((filename) => {
+    return Boolean(getFormatFromFilename(filename) || getAnimationFormatFromFilename(filename));
+  });
+}
+
+function findZipEntry(buffer: Buffer, entryName: string) {
+  let offset = 0;
+
+  while (offset <= buffer.length - 46) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) {
+      offset += 1;
+      continue;
+    }
+
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileNameStart = offset + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    if (fileNameEnd > buffer.length) break;
+
+    const filename = buffer.toString("utf8", fileNameStart, fileNameEnd);
+    if (filename === entryName) {
+      return {
+        compressedSize,
+        compressionMethod,
+        localHeaderOffset,
+      };
+    }
+
+    offset = fileNameEnd + extraLength + commentLength;
+  }
+
+  return null;
+}
+
+function extractZipEntry(buffer: Buffer, entryName: string) {
+  const entry = findZipEntry(buffer, entryName);
+  if (!entry) {
+    throw new Error(`Animation action not found in ZIP: ${entryName}`);
+  }
+  if (buffer.readUInt32LE(entry.localHeaderOffset) !== 0x04034b50) {
+    throw new Error("Invalid ZIP local file header");
+  }
+
+  const localFileNameLength = buffer.readUInt16LE(entry.localHeaderOffset + 26);
+  const localExtraLength = buffer.readUInt16LE(entry.localHeaderOffset + 28);
+  const dataStart = entry.localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+  const dataEnd = dataStart + entry.compressedSize;
+  if (dataStart < 0 || dataEnd > buffer.length) {
+    throw new Error("Invalid ZIP action data range");
+  }
+
+  const compressed = buffer.subarray(dataStart, dataEnd);
+  if (entry.compressionMethod === 0) return Buffer.from(compressed);
+  if (entry.compressionMethod === 8) return inflateRawSync(compressed);
+  throw new Error(`Unsupported ZIP compression method: ${entry.compressionMethod}`);
+}
+
+export function extractFileFromZip(buffer: Buffer, entryName: string) {
+  return extractZipEntry(buffer, entryName);
 }
 
 export async function listModels(filters?: {
@@ -450,6 +715,94 @@ export async function listModels(filters?: {
   }
 
   return models;
+}
+
+export async function listAnimationAssets(filters?: {
+  q?: string;
+  sort?: string;
+}) {
+  const rows = db.prepare("SELECT * FROM animation_assets").all() as Record<
+    string,
+    unknown
+  >[];
+  let animations = rows.map(mapAnimationAsset);
+
+  if (filters?.q) {
+    const query = filters.q.toLowerCase();
+    animations = animations.filter((animation) => {
+      return [
+        animation.name,
+        animation.description ?? "",
+        animation.tags.join(" "),
+        animation.actions.map((action) => action.name).join(" "),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }
+
+  switch (filters?.sort) {
+    case "actions":
+      animations.sort((a, b) => b.actionCount - a.actionCount);
+      break;
+    case "name":
+      animations.sort((a, b) => a.name.localeCompare(b.name));
+      break;
+    default:
+      animations.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      break;
+  }
+
+  return animations;
+}
+
+export async function getAnimationAssetById(id: string) {
+  const row = db.prepare("SELECT * FROM animation_assets WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapAnimationAsset(row) : null;
+}
+
+export async function resolveAnimationActionFile(input: {
+  actionId: string;
+  animation: AnimationAssetRecord;
+}) {
+  const action = input.animation.actions.find((entry) => entry.id === input.actionId);
+  if (!action) {
+    throw new Error("Animation action not found");
+  }
+
+  const animationDir = path.join(publicAnimationsDir, input.animation.id);
+  if (input.animation.format === "fbx") {
+    const sourcePath = path.join(animationDir, "source.fbx");
+    if (!existsSync(sourcePath)) {
+      throw new Error("Animation source FBX is missing");
+    }
+    return {
+      action,
+      sourcePath,
+    };
+  }
+
+  const sourceZipPath = path.join(animationDir, "source.zip");
+  if (!existsSync(sourceZipPath)) {
+    throw new Error("Animation ZIP source is missing");
+  }
+
+  const safeActionName = action.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const actionsDir = path.join(animationDir, "actions");
+  await mkdir(actionsDir, { recursive: true });
+  const extractedPath = path.join(actionsDir, `${safeActionName}.fbx`);
+  if (!existsSync(extractedPath)) {
+    const zipBuffer = readFileSync(sourceZipPath);
+    writeFileSync(extractedPath, extractZipEntry(zipBuffer, action.sourcePath));
+  }
+
+  return {
+    action,
+    sourcePath: extractedPath,
+  };
 }
 
 export async function getModelById(id: string) {
@@ -511,9 +864,11 @@ export async function createLevel(input: {
   id?: string;
   name: string;
   mapModelUrl: string;
+  playerCharacter?: LevelRecord["playerCharacter"];
   playerSpawn: [number, number, number];
   robotSpawn: [number, number, number];
   robotStory: string;
+  storyGraph?: StoryGraphRecord;
   zombieSpawns: ZombieSpawnRecord[];
   placedObjects?: LevelRecord["placedObjects"];
 }) {
@@ -523,9 +878,11 @@ export async function createLevel(input: {
     id: input.id || randomUUID(),
     name: input.name.trim(),
     mapModelUrl: input.mapModelUrl.trim(),
+    playerCharacter: input.playerCharacter ?? null,
     playerSpawn: input.playerSpawn,
     robotSpawn: input.robotSpawn,
     robotStory: input.robotStory.trim(),
+    storyGraph: input.storyGraph ?? EMPTY_STORY_GRAPH,
     zombieSpawns: input.zombieSpawns,
     placedObjects: input.placedObjects ?? [],
     createdAt: existing?.createdAt ?? now,
@@ -535,14 +892,16 @@ export async function createLevel(input: {
   db.prepare(
     `
     INSERT INTO levels (
-      id, name, map_model_url, player_spawn_json, robot_spawn_json, robot_story, zombie_spawns_json, placed_objects_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, name, map_model_url, player_character_json, player_spawn_json, robot_spawn_json, robot_story, story_graph_json, zombie_spawns_json, placed_objects_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       map_model_url = excluded.map_model_url,
+      player_character_json = excluded.player_character_json,
       player_spawn_json = excluded.player_spawn_json,
       robot_spawn_json = excluded.robot_spawn_json,
       robot_story = excluded.robot_story,
+      story_graph_json = excluded.story_graph_json,
       zombie_spawns_json = excluded.zombie_spawns_json,
       placed_objects_json = excluded.placed_objects_json,
       updated_at = excluded.updated_at
@@ -551,9 +910,11 @@ export async function createLevel(input: {
     level.id,
     level.name,
     level.mapModelUrl,
+    level.playerCharacter ? JSON.stringify(level.playerCharacter) : null,
     JSON.stringify(level.playerSpawn),
     JSON.stringify(level.robotSpawn),
     level.robotStory,
+    JSON.stringify(level.storyGraph),
     JSON.stringify(level.zombieSpawns),
     JSON.stringify(level.placedObjects),
     level.createdAt,
@@ -687,12 +1048,13 @@ export async function createModelFromUpload(input: {
   });
 
   const now = new Date().toISOString();
+  const category = ((input.category as ModelCategory) || "other") as ModelCategory;
   const record: ModelRecord = {
     id,
     name: input.name.trim(),
     description: input.description?.trim() || null,
     tags: normalizeTags(input.tags),
-    category: ((input.category as ModelCategory) || "other") as ModelCategory,
+    category,
     elementTypeId: input.elementTypeId || null,
     license: ((input.license as ModelLicense) || "CC0") as ModelLicense,
     originalFilename: safeName,
@@ -705,7 +1067,14 @@ export async function createModelFromUpload(input: {
     materialCount: null,
     hasAnimations: false,
     hasTextures: false,
-    customProps: storedUpload.customProps,
+    customProps: {
+      ...(storedUpload.customProps ?? {}),
+      rigging: inferInitialRiggingMetadata({
+        category,
+        format: storedUpload.format,
+        hasAnimations: false,
+      }),
+    },
     boundingBox: null,
     position: [0, 0, 0],
     rotation: [0, 0, 0],
@@ -755,6 +1124,151 @@ export async function createModelFromUpload(input: {
   );
 
   return record;
+}
+
+export async function createAnimationAssetFromUpload(input: {
+  fileName: string;
+  fileBuffer: Buffer;
+  name?: string;
+  description?: string;
+  tags?: string;
+}) {
+  const format = getAnimationFormatFromFilename(input.fileName);
+  if (!format) {
+    throw new Error("Animation uploads must be FBX files or ZIP packs");
+  }
+
+  const id = randomUUID();
+  const safeName = path.basename(input.fileName);
+  const animationDir = path.join(publicAnimationsDir, id);
+  await mkdir(animationDir, { recursive: true });
+
+  const storedFileName = `source.${format}`;
+  const fileUrl = `/uploads/animations/${id}/${storedFileName}`;
+  writeFileSync(path.join(animationDir, storedFileName), input.fileBuffer);
+
+  const zipEntries = format === "zip" ? listFbxEntriesFromZip(input.fileBuffer) : [];
+  const actions = (format === "zip" ? zipEntries : [safeName]).map((entry, index) => ({
+    id: `${id}-action-${index + 1}`,
+    name: cleanAnimationName(entry) || `Action ${index + 1}`,
+    sourcePath: entry,
+  }));
+
+  if (!actions.length) {
+    throw new Error("ZIP packs must contain at least one FBX animation");
+  }
+
+  const now = new Date().toISOString();
+  const record: AnimationAssetRecord = {
+    id,
+    name: input.name?.trim() || cleanAnimationName(safeName) || "Untitled animation",
+    description: input.description?.trim() || null,
+    tags: normalizeTags(input.tags),
+    sourceKind: format === "zip" ? "pack" : "single",
+    originalFilename: safeName,
+    format,
+    fileUrl,
+    fileSize: input.fileBuffer.byteLength,
+    actionCount: actions.length,
+    actions,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO animation_assets (
+      id, name, description, tags_json, source_kind, original_filename, format, file_url,
+      file_size, action_count, actions_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    record.id,
+    record.name,
+    record.description,
+    JSON.stringify(record.tags),
+    record.sourceKind,
+    record.originalFilename,
+    record.format,
+    record.fileUrl,
+    record.fileSize,
+    record.actionCount,
+    JSON.stringify(record.actions),
+    record.createdAt,
+    record.updatedAt,
+  );
+
+  return record;
+}
+
+export async function createCharacterWithActionsFromUpload(input: {
+  characterFileName: string;
+  characterFileBuffer: Buffer;
+  actionFiles: Array<{
+    fileName: string;
+    fileBuffer: Buffer;
+  }>;
+  name: string;
+  description?: string;
+  tags?: string;
+  category?: string;
+  elementTypeId?: string;
+  license?: string;
+}) {
+  const model = await createModelFromUpload({
+    fileName: input.characterFileName,
+    fileBuffer: input.characterFileBuffer,
+    name: input.name,
+    description: input.description,
+    tags: input.tags,
+    category: input.category,
+    elementTypeId: input.elementTypeId,
+    license: input.license,
+  });
+
+  const actions: CharacterActionLinkRecord[] = [];
+  for (const actionFile of input.actionFiles) {
+    const animation = await createAnimationAssetFromUpload({
+      fileName: actionFile.fileName,
+      fileBuffer: actionFile.fileBuffer,
+      name: cleanAnimationName(actionFile.fileName),
+      tags: input.tags,
+    });
+
+    for (const action of animation.actions) {
+      actions.push({
+        id: `${animation.id}:${action.id}`,
+        animationAssetId: animation.id,
+        actionId: action.id,
+        name: action.name,
+        fileUrl: animation.fileUrl,
+        sourceFilename: animation.originalFilename,
+        sourceFormat: animation.format,
+        sourcePath: action.sourcePath,
+        enabled: true,
+        trigger: "none",
+        keyBinding: null,
+        durationMs: null,
+        dialogueText: null,
+        targetModelId: null,
+      });
+    }
+  }
+
+  const manifest: CharacterAnimationManifest = {
+    version: 1,
+    mode: "external_actions",
+    actions,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return updateModel(model.id, {
+    hasAnimations: actions.length > 0,
+    customProps: {
+      ...(model.customProps ?? {}),
+      characterAnimation: manifest,
+    },
+  });
 }
 
 export async function updateModel(id: string, input: Record<string, unknown>) {
@@ -807,6 +1321,14 @@ export async function updateModel(id: string, input: Record<string, unknown>) {
       input.customProps && typeof input.customProps === "object"
         ? (input.customProps as Record<string, unknown>)
         : current.customProps,
+    hasAnimations:
+      typeof input.hasAnimations === "boolean"
+        ? input.hasAnimations
+        : current.hasAnimations,
+    hasTextures:
+      typeof input.hasTextures === "boolean"
+        ? input.hasTextures
+        : current.hasTextures,
     updatedAt: new Date().toISOString(),
   };
 
@@ -814,7 +1336,7 @@ export async function updateModel(id: string, input: Record<string, unknown>) {
     `
     UPDATE models
     SET name = ?, description = ?, tags_json = ?, category = ?, element_type_id = ?, license = ?,
-        custom_props_json = ?, position_json = ?, rotation_json = ?, scale_json = ?, updated_at = ?
+        has_animations = ?, has_textures = ?, custom_props_json = ?, position_json = ?, rotation_json = ?, scale_json = ?, updated_at = ?
     WHERE id = ?
   `,
   ).run(
@@ -824,6 +1346,8 @@ export async function updateModel(id: string, input: Record<string, unknown>) {
     updated.category,
     updated.elementTypeId,
     updated.license,
+    updated.hasAnimations ? 1 : 0,
+    updated.hasTextures ? 1 : 0,
     updated.customProps ? JSON.stringify(updated.customProps) : null,
     JSON.stringify(updated.position),
     JSON.stringify(updated.rotation),

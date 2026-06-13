@@ -5,8 +5,11 @@ import { useEffect, useMemo, useState } from "react";
 import { EditorViewer } from "@/components/3d/Editor";
 import { MaterialEditor } from "@/components/3d/MaterialEditor";
 import { EditModelForm } from "@/components/EditModelForm";
+import { RiggedAnimationPreview } from "@/components/RiggedAnimationPreview";
+import { RiggingMarkerPanel } from "@/components/RiggingMarkerPanel";
 import { SnapshotVersionButton } from "@/components/SnapshotVersionButton";
 import { useEditor } from "@/hooks/useEditor";
+import { getRiggingMetadata } from "@/lib/model-rigging";
 import type {
   TransformMode,
   TransformState,
@@ -24,7 +27,7 @@ type ModelEditorWorkspaceProps = {
   versions: ModelVersionRecord[];
 };
 
-type WorkspaceTab = "scene" | "materials" | "metadata" | "versions";
+type WorkspaceTab = "scene" | "rigging" | "materials" | "metadata" | "versions";
 
 function formatVector(values: Vector3Tuple) {
   return values.map((value) => value.toFixed(3)).join(", ");
@@ -47,6 +50,7 @@ export function ModelEditorWorkspace({
   versions,
 }: ModelEditorWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("scene");
+  const rigging = getRiggingMetadata(model);
   const editor = useEditor({
     position: model.position,
     rotation: model.rotation,
@@ -79,6 +83,11 @@ export function ModelEditorWorkspace({
           id: "materials",
           label: "Materials",
           description: "Per-mesh material tuning",
+        },
+        {
+          id: "rigging",
+          label: "Rigging",
+          description: "Humanoid markers and auto-rig readiness",
         },
         {
           id: "metadata",
@@ -190,50 +199,85 @@ export function ModelEditorWorkspace({
         </div>
       </div>
 
-      <div className="grid editor-layout">
-        <div className="grid editor-main-column">
-          <div className="card viewer-shell">
-            <EditorViewer
-              interactionMode={editor.interactionMode}
-              mode={editor.mode}
-              onMeshSelectionChange={editor.setSelectedMesh}
-              onTransformChange={(next, commit) => {
-                editor.setTransform(next, commit);
-              }}
-              position={editor.transform.position}
-              rotation={editor.transform.rotation}
-              scale={editor.transform.scale}
-              selectedMaterial={editor.material}
-              selectedMeshId={editor.selectedMeshId}
-              src={model.fileUrl}
-            />
+      {activeTab === "rigging" ? (
+        <section className="card rigging-full-workspace">
+          <div className="section-heading">
+            <div>
+              <h2>Humanoid marker workspace</h2>
+              <p className="helper-text">
+                Select each joint marker and click directly on the uploaded model.
+              </p>
+            </div>
           </div>
+          <RiggingMarkerPanel model={model} />
+        </section>
+      ) : null}
 
-          <div className="card subtle transform-readout">
-            <div className="section-heading">
-              <div>
-                <h2>Transform readout</h2>
-                <p className="helper-text">
-                  Live values stay synced with the gizmo and the metadata form.
-                </p>
-              </div>
+      {rigging.riggedModelUrl ? (
+        <section className="card rigged-output-stage">
+          <div className="section-heading">
+            <div>
+              <h2>Rigged output preview</h2>
+              <p className="helper-text">
+                Review the Blender-generated GLB before using it for action retargeting.
+              </p>
             </div>
-            <div className="details-list transform-readout-grid">
-              <div>
-                <strong>Position</strong>
-                <span>{transformInputs.position}</span>
+            <a className="mixamo-primary-action" href={rigging.riggedModelUrl}>
+              Open rigged GLB
+            </a>
+          </div>
+          <div className="rigged-output-viewer">
+            <RiggedAnimationPreview cacheKey={rigging.updatedAt} src={rigging.riggedModelUrl} />
+          </div>
+        </section>
+      ) : null}
+
+      <div className={`grid editor-layout${activeTab === "rigging" ? " rigging-active" : ""}`}>
+        {activeTab !== "rigging" ? (
+          <div className="grid editor-main-column">
+            <div className="card viewer-shell">
+              <EditorViewer
+                interactionMode={editor.interactionMode}
+                mode={editor.mode}
+                onMeshSelectionChange={editor.setSelectedMesh}
+                onTransformChange={(next, commit) => {
+                  editor.setTransform(next, commit);
+                }}
+                position={editor.transform.position}
+                rotation={editor.transform.rotation}
+                scale={editor.transform.scale}
+                selectedMaterial={editor.material}
+                selectedMeshId={editor.selectedMeshId}
+                src={model.fileUrl}
+              />
+            </div>
+
+            <div className="card subtle transform-readout">
+              <div className="section-heading">
+                <div>
+                  <h2>Transform readout</h2>
+                  <p className="helper-text">
+                    Live values stay synced with the gizmo and the metadata form.
+                  </p>
+                </div>
               </div>
-              <div>
-                <strong>Rotation</strong>
-                <span>{transformInputs.rotation}</span>
-              </div>
-              <div>
-                <strong>Scale</strong>
-                <span>{transformInputs.scale}</span>
+              <div className="details-list transform-readout-grid">
+                <div>
+                  <strong>Position</strong>
+                  <span>{transformInputs.position}</span>
+                </div>
+                <div>
+                  <strong>Rotation</strong>
+                  <span>{transformInputs.rotation}</span>
+                </div>
+                <div>
+                  <strong>Scale</strong>
+                  <span>{transformInputs.scale}</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         <aside className="card editor-side-panel">
           <div className="section-heading">
@@ -292,6 +336,20 @@ export function ModelEditorWorkspace({
                   <strong>Scale:</strong> {transformInputs.scale}
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div
+            aria-labelledby="editor-tab-rigging"
+            className={`tab-panel${activeTab === "rigging" ? " active" : ""}`}
+            id="editor-panel-rigging"
+            role="tabpanel"
+          >
+            <div className="card subtle details-panel">
+              <h3>Rigging workspace</h3>
+              <p className="helper-text">
+                Marker placement opens in the full-width workspace beside the main viewport.
+              </p>
             </div>
           </div>
 

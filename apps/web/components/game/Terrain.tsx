@@ -10,9 +10,27 @@ type TerrainProps = {
   onReady?: (scene: THREE.Object3D) => void;
 };
 
-export function Terrain({ onReady }: TerrainProps) {
+const GAME_MAP_MAX_SIZE = 92;
+
+function getRenderableBounds(object: THREE.Object3D) {
+  object.updateMatrixWorld(true);
+  const bounds = new THREE.Box3();
+  const localBounds = new THREE.Box3();
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh || child instanceof THREE.SkinnedMesh)) return;
+    const geometry = child.geometry;
+    if (!geometry) return;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) return;
+    child.updateMatrixWorld(true);
+    localBounds.copy(geometry.boundingBox).applyMatrix4(child.matrixWorld);
+    bounds.union(localBounds);
+  });
+  return bounds.isEmpty() ? new THREE.Box3().setFromObject(object) : bounds;
+}
+
+function TerrainModel({ mapModelUrl, onReady }: TerrainProps & { mapModelUrl: string }) {
   const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
-  const mapModelUrl = useGameStore((state) => state.activeLevel.mapModelUrl);
   const { scene } = useGLTF(mapModelUrl, dracoPath);
 
   // Optimize material parameters, shadows and ensure static caching
@@ -42,7 +60,16 @@ export function Terrain({ onReady }: TerrainProps) {
       }
     });
     cloned.updateMatrixWorld(true);
-    const bounds = new THREE.Box3().setFromObject(cloned);
+    const sourceBounds = getRenderableBounds(cloned);
+    if (!sourceBounds.isEmpty()) {
+      const size = sourceBounds.getSize(new THREE.Vector3());
+      const mapSpan = Math.max(size.x, size.z);
+      if (mapSpan > 0.0001) {
+        cloned.scale.setScalar(GAME_MAP_MAX_SIZE / mapSpan);
+      }
+      cloned.updateMatrixWorld(true);
+    }
+    const bounds = getRenderableBounds(cloned);
     if (!bounds.isEmpty()) {
       cloned.position.y -= bounds.min.y;
       cloned.updateMatrixWorld(true);
@@ -61,5 +88,8 @@ export function Terrain({ onReady }: TerrainProps) {
   );
 }
 
-// Preload the default terrain GLB
-useGLTF.preload("/uploads/models/d9d70e25-4e3b-4d34-97be-c56ec50e8a26/delivery.glb", "https://www.gstatic.com/draco/v1/decoders/");
+export function Terrain({ onReady }: TerrainProps) {
+  const mapModelUrl = useGameStore((state) => state.activeLevel.mapModelUrl);
+  if (!mapModelUrl) return null;
+  return <TerrainModel mapModelUrl={mapModelUrl} onReady={onReady} />;
+}

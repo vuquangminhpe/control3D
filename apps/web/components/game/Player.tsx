@@ -1,11 +1,41 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier";
 import * as THREE from "three";
 import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
-import { PaladinCharacter } from "./PaladinCharacter";
+import { ModelLoader } from "@/components/3d/ModelLoader";
+
+const BOW_MIN_SPEED = 18;
+const BOW_MAX_SPEED = 46;
+const BOW_MAX_CHARGE_MS = 1250;
+const BOW_GRAVITY = -19.8;
+const BOW_TRAJECTORY_STEPS = 28;
+const BOW_TRAJECTORY_STEP_SECONDS = 0.075;
+
+function CustomPlayerVisual({ src }: { src: string }) {
+  return (
+    <group position={[0, -1.5, 0]}>
+      <Suspense fallback={null}>
+        <ModelLoader fitHeight={1.85} groundToY={0} src={src} />
+      </Suspense>
+    </group>
+  );
+}
+
+function buildBowTrajectory(origin: THREE.Vector3, velocity: THREE.Vector3): [number, number, number][] {
+  const points: [number, number, number][] = [];
+  for (let i = 0; i < BOW_TRAJECTORY_STEPS; i += 1) {
+    const t = i * BOW_TRAJECTORY_STEP_SECONDS;
+    points.push([
+      Number((origin.x + velocity.x * t).toFixed(3)),
+      Number((origin.y + velocity.y * t + 0.5 * BOW_GRAVITY * t * t).toFixed(3)),
+      Number((origin.z + velocity.z * t).toFixed(3)),
+    ]);
+  }
+  return points;
+}
 
 export function Player() {
   const rigidBodyRef = useRef<any>(null);
@@ -21,6 +51,10 @@ export function Player() {
   const triggerAttackEnd = useGameStore((state) => state.triggerAttackEnd);
   const hitEnemy = useGameStore((state) => state.hitEnemy);
   const activeDialogueNpcId = useGameStore((state) => state.activeDialogueNpcId);
+  const setBowAim = useGameStore((state) => state.setBowAim);
+  const clearBowAim = useGameStore((state) => state.clearBowAim);
+  const spawnArrow = useGameStore((state) => state.spawnArrow);
+  const playerCharacter = useGameStore((state) => state.activeLevel.playerCharacter);
 
   // Local movement states
   const [keys, setKeys] = useState({ w: false, a: false, s: false, d: false, Shift: false });
@@ -44,7 +78,18 @@ export function Player() {
   const attackQuaternionRef = useRef(new THREE.Quaternion());
   const cameraForwardRef = useRef(new THREE.Vector3());
   const cameraRightRef = useRef(new THREE.Vector3());
+  const weaponForwardRef = useRef(new THREE.Vector3());
+  const bowOriginRef = useRef(new THREE.Vector3());
+  const bowDirectionRef = useRef(new THREE.Vector3());
+  const bowVelocityRef = useRef(new THREE.Vector3());
+  const bowFlatDirectionRef = useRef(new THREE.Vector3());
+  const bowTargetQuaternionRef = useRef(new THREE.Quaternion());
   const yAxisRef = useRef(new THREE.Vector3(0, 1, 0));
+  const bowAimingRef = useRef(false);
+  const bowChargeStartMsRef = useRef(0);
+  const bowReleaseUntilMsRef = useRef(0);
+  const bowReleaseTimeoutRef = useRef<number | null>(null);
+  const previousBowFireHeldRef = useRef(false);
 
   // Speed configuration
   const speed = 7;
@@ -61,6 +106,13 @@ export function Player() {
     if (hitRecoveryTimeoutRef.current !== null) {
       window.clearTimeout(hitRecoveryTimeoutRef.current);
       hitRecoveryTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearBowReleaseTimeout = useCallback(() => {
+    if (bowReleaseTimeoutRef.current !== null) {
+      window.clearTimeout(bowReleaseTimeoutRef.current);
+      bowReleaseTimeoutRef.current = null;
     }
   }, []);
 
@@ -96,7 +148,7 @@ export function Player() {
   }, [clearAttackRecoveryTimeout, finishAttackAnimation, triggerAttackStart]);
 
   const handleJump = useCallback(() => {
-    if (!rigidBodyRef.current || jumpActiveRef.current || groundedContactsRef.current <= 0) {
+    if (!rigidBodyRef.current || jumpActiveRef.current || groundedContactsRef.current <= 0 || bowAimingRef.current) {
       return;
     }
 
@@ -106,6 +158,61 @@ export function Player() {
     setActionState("jump");
     body.setLinvel({ x: currentVel.x, y: 6.8, z: currentVel.z }, true);
   }, []);
+
+  const startBowAim = useCallback(() => {
+    const gameState = useGameStore.getState();
+    if (gameState.selectedWeapon !== "bow" || isAttackingRef.current || bowAimingRef.current) return false;
+
+    clearAttackRecoveryTimeout();
+    clearBowReleaseTimeout();
+    bowAimingRef.current = true;
+    bowChargeStartMsRef.current = window.performance.now();
+    bowReleaseUntilMsRef.current = 0;
+    hasHitThisSwing.current = false;
+    triggerAttackEnd();
+    setComboStep(0);
+    setActionState("block");
+    return true;
+  }, [clearAttackRecoveryTimeout, clearBowReleaseTimeout, triggerAttackEnd]);
+
+  const shootBow = useCallback(() => {
+    if (!bowAimingRef.current) return;
+
+    const gameState = useGameStore.getState();
+    const aim = gameState.bowAim;
+    const bowLoadout = gameState.weaponLoadouts.bow;
+    const charge = Math.max(0.08, aim.charge);
+    const damage = Math.max(1, Math.round((16 + 42 * charge) * bowLoadout.hitbox.damageMultiplier));
+
+    bowAimingRef.current = false;
+    clearBowAim();
+
+    if (gameState.selectedWeapon === "bow" && aim.isAiming) {
+      spawnArrow({
+        position: aim.origin,
+        velocity: aim.velocity,
+        damage,
+        power: charge,
+      });
+      bowReleaseUntilMsRef.current = window.performance.now() + 260;
+      setActionState("attack");
+      bowReleaseTimeoutRef.current = window.setTimeout(() => {
+        bowReleaseUntilMsRef.current = 0;
+        if (!isAttackingRef.current && !blockActiveRef.current && !jumpActiveRef.current) {
+          setActionState("idle");
+        }
+      }, 260);
+    }
+  }, [clearBowAim, spawnArrow]);
+
+  const cancelBowAim = useCallback(() => {
+    if (!bowAimingRef.current) return;
+    bowAimingRef.current = false;
+    clearBowAim();
+    if (!isAttackingRef.current && !jumpActiveRef.current) {
+      setActionState("idle");
+    }
+  }, [clearBowAim]);
 
   useEffect(() => {
     if (playerHp < previousHpRef.current && playerHp > 0 && !isAttackingRef.current && !jumpActiveRef.current) {
@@ -125,10 +232,14 @@ export function Player() {
   // Handle attacks (Combo system)
   const handleAttack = useCallback((mode: "light" | "heavy" | "alt") => {
     if (isAttackingRef.current) return;
-    const selectedWeapon = useGameStore.getState().selectedWeapon;
+    const gameState = useGameStore.getState();
+    const selectedWeapon = gameState.selectedWeapon;
+    const weaponHitbox = gameState.weaponLoadouts[selectedWeapon].hitbox;
+    const damageMultiplier = weaponHitbox.damageMultiplier;
 
     if (mode === "heavy") {
-      const heavyDamage = selectedWeapon === "greatsword" ? 55 : selectedWeapon === "bow" ? 28 : 35;
+      const baseHeavyDamage = selectedWeapon === "greatsword" ? 55 : selectedWeapon === "bow" ? 28 : 35;
+      const heavyDamage = Math.max(1, Math.round(baseHeavyDamage * damageMultiplier));
       beginAttack("kick", 3, { damage: heavyDamage, critChance: 0.4 }, 1100);
       return;
     }
@@ -155,15 +266,15 @@ export function Player() {
       beginAttack(
         selectedAttack.action,
         selectedAttack.combo,
-        { damage: selectedAttack.damage + weaponBonus, critChance: selectedAttack.critChance },
+        { damage: Math.max(1, Math.round((selectedAttack.damage + weaponBonus) * damageMultiplier)), critChance: selectedAttack.critChance },
         recoveryDelay
       );
       return;
     }
 
     let nextStep = 1;
-    const lightDamage = selectedWeapon === "greatsword" ? 26 : selectedWeapon === "bow" ? 18 : 15;
-    const slashDamage = selectedWeapon === "greatsword" ? 36 : selectedWeapon === "bow" ? 24 : 22;
+    const lightDamage = Math.max(1, Math.round((selectedWeapon === "greatsword" ? 26 : selectedWeapon === "bow" ? 18 : 15) * damageMultiplier));
+    const slashDamage = Math.max(1, Math.round((selectedWeapon === "greatsword" ? 36 : selectedWeapon === "bow" ? 24 : 22) * damageMultiplier));
     if (comboStep === 1) {
       nextStep = 2;
       beginAttack("slash", nextStep, { damage: slashDamage, critChance: 0.24 }, 900);
@@ -216,7 +327,14 @@ export function Player() {
       if (playerHp <= 0 || activeDialogueNpcId) return;
       if (e.button !== 2 || isAttackingRef.current) return;
       e.preventDefault();
+      if (startBowAim()) return;
       handleAttack("alt");
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      shootBow();
     };
 
     const handleContextMenu = (e: MouseEvent) => {
@@ -226,43 +344,41 @@ export function Player() {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mouseup", handleMouseUp);
     window.addEventListener("contextmenu", handleContextMenu);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, [activeDialogueNpcId, handleAttack, handleJump, playerHp]);
-
-  // Called when animations end playing
-  const onAnimationFinished = useCallback((actionName: string) => {
-    if (["attack", "slash", "kick", "attackAlt1", "attackAlt2", "attackAlt3"].includes(actionName)) {
-      finishAttackAnimation();
-    }
-    if (actionName === "death") {
-      // Stay in death state
-    }
-  }, [finishAttackAnimation]);
+  }, [activeDialogueNpcId, handleAttack, handleJump, playerHp, shootBow, startBowAim]);
 
   useEffect(() => {
     return () => {
       clearAttackRecoveryTimeout();
       clearHitRecoveryTimeout();
+      clearBowReleaseTimeout();
+      clearBowAim();
     };
-  }, [clearAttackRecoveryTimeout, clearHitRecoveryTimeout]);
+  }, [clearAttackRecoveryTimeout, clearBowAim, clearBowReleaseTimeout, clearHitRecoveryTimeout]);
 
   // Combat collision check (checks on active frame window)
   const checkCombatCollisions = (playerPos: THREE.Vector3) => {
-    if (hasHitThisSwing.current) return;
+    if (hasHitThisSwing.current || !playerNodeRef.current) return;
 
-    const selectedWeapon = useGameStore.getState().selectedWeapon;
-    const swordReach =
-      selectedWeapon === "bow" ? 11 :
-      selectedWeapon === "greatsword" ? 3.1 :
-      2.65;
-    const enemies = useGameStore.getState().enemies;
+    const gameState = useGameStore.getState();
+    const selectedWeapon = gameState.selectedWeapon;
+    const weaponHitbox = gameState.weaponLoadouts[selectedWeapon].hitbox;
+    const enemies = gameState.enemies;
+    const weaponForward = weaponForwardRef.current
+      .set(0, 0, 1)
+      .applyQuaternion(playerNodeRef.current.quaternion)
+      .setY(0)
+      .normalize();
+    const minFacingDot = Math.cos(THREE.MathUtils.degToRad(weaponHitbox.arcDegrees) / 2);
     let closestHit:
       | {
           enemyId: string;
@@ -279,9 +395,12 @@ export function Player() {
       const toEnemy = toEnemyVecRef.current.copy(enemyPos).sub(playerPos);
       toEnemy.y = 0;
       const distance = toEnemy.length();
+      const directionToEnemy = distance > 0 ? toEnemy.clone().normalize() : toEnemy;
+      const isInsideArc = weaponForward.dot(directionToEnemy) >= minFacingDot;
       const targetRadius = enemy.type === "zombie_fantasy" ? 1.35 : 0.75;
+      const hitDistance = weaponHitbox.reach + weaponHitbox.radius + targetRadius;
 
-      if (distance <= swordReach + targetRadius && (!closestHit || distance < closestHit.distance)) {
+      if (isInsideArc && distance <= hitDistance && (!closestHit || distance < closestHit.distance)) {
         closestHit = {
           enemyId: enemy.id,
           position: runtimePos,
@@ -329,6 +448,7 @@ export function Player() {
     // Handle Death
     if (playerHp <= 0) {
       if (actionState !== "death") {
+        cancelBowAim();
         finishAttackAnimation();
         setActionState("death");
         body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -337,12 +457,71 @@ export function Player() {
     }
 
     if (activeDialogueNpcId) {
+      cancelBowAim();
       if (isAttackingRef.current) {
         finishAttackAnimation();
       }
       if (actionState !== "idle") {
         setActionState("idle");
       }
+      body.setLinvel({ x: 0, y: currentVel.y, z: 0 }, true);
+      return;
+    }
+
+    const frameGameState = useGameStore.getState();
+    const bowFireHeld = frameGameState.selectedWeapon === "bow" && frameGameState.bowFireHeld;
+    if (bowFireHeld && !previousBowFireHeldRef.current && !bowAimingRef.current && !isAttackingRef.current) {
+      startBowAim();
+    }
+    if (!bowFireHeld && previousBowFireHeldRef.current && bowAimingRef.current) {
+      shootBow();
+    }
+    previousBowFireHeldRef.current = bowFireHeld;
+
+    if (bowAimingRef.current) {
+      const gameState = useGameStore.getState();
+      if (gameState.selectedWeapon !== "bow") {
+        cancelBowAim();
+      } else {
+        const charge = THREE.MathUtils.clamp(
+          (window.performance.now() - bowChargeStartMsRef.current) / BOW_MAX_CHARGE_MS,
+          0,
+          1,
+        );
+        const speed = THREE.MathUtils.lerp(BOW_MIN_SPEED, BOW_MAX_SPEED, charge);
+        const bowDirection = bowDirectionRef.current;
+        camera.getWorldDirection(bowDirection).normalize();
+        const bowOrigin = bowOriginRef.current
+          .copy(playerVec3)
+          .addScaledVector(bowDirection, 0.9);
+        bowOrigin.y += 1.55;
+        const bowVelocity = bowVelocityRef.current.copy(bowDirection).multiplyScalar(speed);
+        const flatDirection = bowFlatDirectionRef.current.copy(bowDirection).setY(0);
+
+        if (flatDirection.lengthSq() > 0.001) {
+          flatDirection.normalize();
+          const angle = Math.atan2(flatDirection.x, flatDirection.z);
+          const targetRotation = bowTargetQuaternionRef.current.setFromAxisAngle(yAxisRef.current, angle);
+          playerNodeRef.current.quaternion.slerp(targetRotation, rotationSpeed * delta);
+        }
+
+        setBowAim({
+          isAiming: true,
+          charge,
+          origin: [bowOrigin.x, bowOrigin.y, bowOrigin.z],
+          velocity: [bowVelocity.x, bowVelocity.y, bowVelocity.z],
+          trajectory: buildBowTrajectory(bowOrigin, bowVelocity),
+        });
+
+        if (actionState !== "block") {
+          setActionState("block");
+        }
+        body.setLinvel({ x: 0, y: currentVel.y, z: 0 }, true);
+        return;
+      }
+    }
+
+    if (bowReleaseUntilMsRef.current > window.performance.now()) {
       body.setLinvel({ x: 0, y: currentVel.y, z: 0 }, true);
       return;
     }
@@ -462,10 +641,7 @@ export function Player() {
         }}
       />
       <group ref={playerNodeRef}>
-        <PaladinCharacter
-          currentAction={actionState}
-          onAnimationFinished={onAnimationFinished}
-        />
+        {playerCharacter?.fileUrl ? <CustomPlayerVisual src={playerCharacter.fileUrl} /> : null}
       </group>
     </RigidBody>
   );

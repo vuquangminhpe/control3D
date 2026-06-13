@@ -22,14 +22,8 @@ import { EnvironmentPicker } from "@/components/3d/EnvironmentPicker";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { ViewerPostProcessing } from "@/components/3d/PostProcessing";
 import { fitCameraToModel } from "@/lib/3d/camera";
-import {
-  type EnvironmentPreset,
-  type TransformState,
-} from "@/lib/3d/types";
-import {
-  createRenderer,
-  getInitialRendererLabel,
-} from "@/lib/3d/three-setup";
+import { type EnvironmentPreset, type TransformState } from "@/lib/3d/types";
+import { createRenderer, getInitialRendererLabel } from "@/lib/3d/three-setup";
 
 type OrbitControlsLike = {
   target: THREE.Vector3;
@@ -63,7 +57,9 @@ function ViewerCanvas({
         throw new Error("Canvas element is required");
       }
 
-      const { label, renderer } = await createRenderer(props.canvas);
+      const { label, renderer } = await createRenderer(props.canvas, {
+        backend: "webgl",
+      });
       setRendererLabel(label);
       return renderer;
     },
@@ -101,9 +97,9 @@ function AutoFitCamera({
 
   useEffect(() => {
     if (
-      !(camera instanceof THREE.PerspectiveCamera)
-      || !controlsRef.current
-      || !model
+      !(camera instanceof THREE.PerspectiveCamera) ||
+      !controlsRef.current ||
+      !model
     ) {
       return;
     }
@@ -178,15 +174,12 @@ function InspectScene({
   );
 }
 
-export function InspectViewer({
-  src,
-  variant = "detail",
-}: InspectViewerProps) {
+export function InspectViewer({ src, variant = "detail" }: InspectViewerProps) {
   const [environmentPreset, setEnvironmentPreset] = useState<EnvironmentPreset>(
     variant === "preview" ? "studio" : "warehouse",
   );
   const [showGrid, setShowGrid] = useState(true);
-  const [showAxes, setShowAxes] = useState(variant === "detail");
+  const [showAxes, setShowAxes] = useState(false);
   const [wireframe, setWireframe] = useState(false);
   const [qualityMode, setQualityMode] = useState(false);
 
@@ -203,44 +196,6 @@ export function InspectViewer({
           wireframe={wireframe}
         />
       </ViewerCanvas>
-      {variant === "detail" ? (
-        <div className="viewer-toolbar">
-          <EnvironmentPicker
-            onChange={setEnvironmentPreset}
-            value={environmentPreset}
-          />
-          <div className="viewer-toolbar-group">
-            <button
-              className={`viewer-chip${showGrid ? " active" : ""}`}
-              onClick={() => setShowGrid((value) => !value)}
-              type="button"
-            >
-              Grid
-            </button>
-            <button
-              className={`viewer-chip${showAxes ? " active" : ""}`}
-              onClick={() => setShowAxes((value) => !value)}
-              type="button"
-            >
-              Axes
-            </button>
-            <button
-              className={`viewer-chip${wireframe ? " active" : ""}`}
-              onClick={() => setWireframe((value) => !value)}
-              type="button"
-            >
-              Wireframe
-            </button>
-            <button
-              className={`viewer-chip${qualityMode ? " active" : ""}`}
-              onClick={() => setQualityMode((value) => !value)}
-              type="button"
-            >
-              Quality FX
-            </button>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

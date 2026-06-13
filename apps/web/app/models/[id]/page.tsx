@@ -6,6 +6,7 @@ import {
   getOptimizationMetadata,
   resolveModelAssetUrl,
 } from "@/lib/model-assets";
+import { getRiggingMetadata, rigMarkerLabels } from "@/lib/model-rigging";
 import {
   getElementTypes,
   getVersionsForModel,
@@ -40,6 +41,7 @@ export default async function ModelDetailPage({ params }: PageProps) {
     (type) => type.id === model.elementTypeId,
   );
   const optimization = getOptimizationMetadata(model);
+  const rigging = getRiggingMetadata(model);
   const originalAssetUrl = resolveModelAssetUrl(model, "original");
   const deliveryAssetUrl = resolveModelAssetUrl(model, "delivery");
   const hasSeparateDelivery = originalAssetUrl !== deliveryAssetUrl;
@@ -64,9 +66,6 @@ export default async function ModelDetailPage({ params }: PageProps) {
           >
             Download original
           </a>
-          <Link href={`/models/${model.id}/edit`}>
-            Edit
-          </Link>
         </div>
       </div>
 
@@ -139,17 +138,37 @@ export default async function ModelDetailPage({ params }: PageProps) {
             </a>
           </div>
 
-          <h3>Transform defaults</h3>
+          <h3>Rigging</h3>
           <div className="details-list">
             <div>
-              <strong>Position:</strong> {model.position.join(", ")}
+              <strong>Status:</strong> {rigging.status.replaceAll("_", " ")}
             </div>
             <div>
-              <strong>Rotation:</strong> {model.rotation.join(", ")}
+              <strong>Rig type:</strong> {rigging.rigType}
             </div>
             <div>
-              <strong>Scale:</strong> {model.scale.join(", ")}
+              <strong>Source:</strong> {rigging.source.replaceAll("_", " ")}
             </div>
+            <div>
+              <strong>Markers:</strong> {rigging.markers.length ? `${rigging.markers.length} saved` : "None"}
+            </div>
+            {rigging.markers.length ? (
+              <div>
+                <strong>Marker set:</strong> {rigging.markers.map((marker) => rigMarkerLabels[marker.name]).join(", ")}
+              </div>
+            ) : null}
+            {rigging.statusReason ? (
+              <div>
+                <strong>Note:</strong> {rigging.statusReason}
+              </div>
+            ) : null}
+          </div>
+          <div className="inline-actions wrap-actions">
+            {rigging.riggedModelUrl ? (
+              <a className="mixamo-secondary-action" href={rigging.riggedModelUrl}>
+                Open rigged GLB
+              </a>
+            ) : null}
           </div>
 
           <h3>Tags</h3>

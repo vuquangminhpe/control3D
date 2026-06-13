@@ -7,6 +7,29 @@ export type GameStatus = "playing" | "game_over" | "victory";
 
 export type EnemyType = "zombie_low" | "zombie_fantasy";
 export type WeaponType = "sword" | "bow" | "greatsword";
+export type WeaponActionPose = "default" | "idle" | "walk" | "run" | "attack" | "slash" | "kick" | "block";
+
+export type WeaponTransform = {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+};
+
+export type WeaponHitbox = {
+  reach: number;
+  radius: number;
+  arcDegrees: number;
+  damageMultiplier: number;
+};
+
+export type WeaponLoadout = {
+  modelId?: string;
+  name: string;
+  fileUrl?: string;
+  transform: WeaponTransform;
+  actionTransforms: Partial<Record<WeaponActionPose, WeaponTransform>>;
+  hitbox: WeaponHitbox;
+};
 
 export type ZombieSpawn = {
   id: string;
@@ -24,13 +47,51 @@ export type PlacedObject = {
   scale: [number, number, number];
 };
 
+export type StoryNodeKind = "start" | "character" | "dialogue" | "choice" | "event" | "shop";
+
+export type StoryNode = {
+  id: string;
+  kind: StoryNodeKind;
+  title: string;
+  text: string;
+  modelId?: string | null;
+  modelName?: string | null;
+  fileUrl?: string | null;
+  action?: string | null;
+  condition?: string | null;
+  currencyChange?: number | null;
+  position: { x: number; y: number };
+};
+
+export type StoryEdge = {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  label: string;
+  condition?: string | null;
+};
+
+export type StoryGraph = {
+  nodes: StoryNode[];
+  edges: StoryEdge[];
+};
+
+export type LevelCharacter = {
+  modelId: string;
+  name: string;
+  fileUrl: string;
+  format?: string;
+};
+
 export type GameLevel = {
   id: string;
   name: string;
   mapModelUrl: string;
+  playerCharacter?: LevelCharacter | null;
   playerSpawn: [number, number, number];
   robotSpawn: [number, number, number];
   robotStory: string;
+  storyGraph: StoryGraph;
   zombieSpawns: ZombieSpawn[];
   placedObjects: PlacedObject[];
   createdAt: string;
@@ -54,6 +115,23 @@ export type FloatingDamage = {
   isCritical: boolean;
 };
 
+export type BowAimState = {
+  isAiming: boolean;
+  charge: number;
+  origin: [number, number, number];
+  velocity: [number, number, number];
+  trajectory: [number, number, number][];
+};
+
+export type ArrowProjectileState = {
+  id: string;
+  position: [number, number, number];
+  velocity: [number, number, number];
+  damage: number;
+  power: number;
+  createdAt: number;
+};
+
 export type DialogOption = {
   text: string;
   nextNodeId: string;
@@ -66,10 +144,110 @@ export type DialogNode = {
   options: DialogOption[];
 };
 
-const PLAYER_SPAWN_POSITION: [number, number, number] = [0, 1.5, 5];
-const ROBOT_SPAWN_POSITION: [number, number, number] = [-9, 1.2, 12];
-const DEFAULT_MAP_MODEL_URL = "/uploads/models/d9d70e25-4e3b-4d34-97be-c56ec50e8a26/delivery.glb";
+const PLAYER_SPAWN_POSITION: [number, number, number] = [0, 1.5, 0];
+const ROBOT_SPAWN_POSITION: [number, number, number] = [0, 0, 0];
+const DEFAULT_MAP_MODEL_URL = "";
 const CUSTOM_LEVELS_STORAGE_KEY = "control3d.customLevels.v1";
+const WEAPON_LOADOUTS_STORAGE_KEY = "control3d.weaponLoadouts.v1";
+const EMPTY_BOW_AIM: BowAimState = {
+  isAiming: false,
+  charge: 0,
+  origin: [0, 0, 0],
+  velocity: [0, 0, 0],
+  trajectory: [],
+};
+
+const EMPTY_STORY_GRAPH: StoryGraph = {
+  nodes: [
+    {
+      id: "story-start",
+      kind: "start",
+      title: "Start",
+      text: "Story begins here.",
+      position: { x: 96, y: 160 },
+    },
+  ],
+  edges: [],
+};
+
+export const weaponCatalog: Record<WeaponType, { label: string; cost: number; description: string }> = {
+  sword: {
+    label: "Sword",
+    cost: 0,
+    description: "Balanced melee weapon. Good default timing for slash chains.",
+  },
+  bow: {
+    label: "Bow",
+    cost: 200,
+    description: "Longer hit reach for safer ranged-style combat.",
+  },
+  greatsword: {
+    label: "Greatsword",
+    cost: 450,
+    description: "Heavy melee weapon with stronger light and heavy hits.",
+  },
+};
+
+const DEFAULT_WEAPON_LOADOUTS: Record<WeaponType, WeaponLoadout> = {
+  sword: {
+    name: "Default energy sword",
+    transform: {
+      position: [0, 0, 0],
+      rotation: [-90, 0, 90],
+      scale: [1, 1, 1],
+    },
+    hitbox: {
+      reach: 2.65,
+      radius: 0.45,
+      arcDegrees: 96,
+      damageMultiplier: 1,
+    },
+    actionTransforms: {
+      attack: { position: [0, -4, 3], rotation: [-96, 10, 102], scale: [1.04, 1.04, 1.04] },
+      slash: { position: [2, -2, 1], rotation: [-92, -18, 86], scale: [1.06, 1.06, 1.06] },
+      kick: { position: [0, -3, 2], rotation: [-104, 0, 96], scale: [1.02, 1.02, 1.02] },
+      block: { position: [-2, 0, 2], rotation: [-80, 18, 74], scale: [1, 1, 1] },
+    },
+  },
+  bow: {
+    name: "Default bow slot",
+    transform: {
+      position: [0, 2, 0],
+      rotation: [-80, 0, 92],
+      scale: [1, 1, 1],
+    },
+    hitbox: {
+      reach: 11,
+      radius: 0.35,
+      arcDegrees: 28,
+      damageMultiplier: 0.92,
+    },
+    actionTransforms: {
+      attack: { position: [0, -2, 5], rotation: [-86, 4, 96], scale: [1.03, 1.03, 1.03] },
+      slash: { position: [0, -2, 5], rotation: [-86, 4, 96], scale: [1.03, 1.03, 1.03] },
+      block: { position: [-3, 1, 1], rotation: [-74, 22, 82], scale: [1, 1, 1] },
+    },
+  },
+  greatsword: {
+    name: "Default greatsword slot",
+    transform: {
+      position: [0, -3, 0],
+      rotation: [-90, 0, 90],
+      scale: [1.28, 1.28, 1.28],
+    },
+    hitbox: {
+      reach: 3.1,
+      radius: 0.72,
+      arcDegrees: 112,
+      damageMultiplier: 1.18,
+    },
+    actionTransforms: {
+      attack: { position: [0, -7, 4], rotation: [-100, 12, 104], scale: [1.34, 1.34, 1.34] },
+      slash: { position: [3, -4, 2], rotation: [-94, -22, 88], scale: [1.36, 1.36, 1.36] },
+      kick: { position: [0, -5, 3], rotation: [-108, 0, 100], scale: [1.3, 1.3, 1.3] },
+    },
+  },
+};
 
 const enemyRuntimePositions = new Map<string, [number, number, number]>();
 
@@ -91,31 +269,16 @@ function getEnemyStats(type: EnemyType) {
     : { health: 40, maxHealth: 40 };
 }
 
-function createDefaultZombieSpawns(): ZombieSpawn[] {
-  return [
-    { id: "e1", type: "zombie_low", position: [14, 1.2, -16] },
-    { id: "e2", type: "zombie_low", position: [6, 1.2, -24] },
-    { id: "e3", type: "zombie_fantasy", position: [-12, 1.2, -18] },
-    { id: "e4", type: "zombie_fantasy", position: [-4, 1.2, -30] },
-    { id: "e5", type: "zombie_low", position: [18, 1.2, -28] },
-    { id: "e6", type: "zombie_low", position: [10, 1.2, -36] },
-    { id: "e7", type: "zombie_low", position: [-18, 1.2, -28] },
-    { id: "e8", type: "zombie_low", position: [-10, 1.2, -38] },
-    { id: "e9", type: "zombie_fantasy", position: [20, 1.2, -42] },
-    { id: "e10", type: "zombie_fantasy", position: [-22, 1.2, -44] },
-    { id: "e11", type: "zombie_low", position: [0, 1.2, -46] },
-    { id: "e12", type: "zombie_low", position: [8, 1.2, -52] },
-  ];
-}
-
 const DEFAULT_LEVEL: GameLevel = {
-  id: "default-sector",
-  name: "Default Sector",
+  id: "empty-map",
+  name: "New Map",
   mapModelUrl: DEFAULT_MAP_MODEL_URL,
+  playerCharacter: null,
   playerSpawn: PLAYER_SPAWN_POSITION,
   robotSpawn: ROBOT_SPAWN_POSITION,
-  robotStory: "I can sell field gear based on your score. Clear threats, earn score, then come back for a bow or stronger blade.",
-  zombieSpawns: createDefaultZombieSpawns(),
+  robotStory: "",
+  storyGraph: EMPTY_STORY_GRAPH,
+  zombieSpawns: [],
   placedObjects: [],
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
@@ -143,6 +306,60 @@ function createEnemiesFromLevel(level: GameLevel): EnemyState[] {
   return enemies;
 }
 
+function normalizeStoryGraph(graph: StoryGraph | undefined | null): StoryGraph {
+  if (!graph || !Array.isArray(graph.nodes) || !graph.nodes.length) {
+    return {
+      nodes: EMPTY_STORY_GRAPH.nodes.map((node) => ({ ...node, position: { ...node.position } })),
+      edges: [],
+    };
+  }
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  return {
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      text: node.text ?? "",
+      position: {
+        x: Number.isFinite(node.position?.x) ? node.position.x : 96,
+        y: Number.isFinite(node.position?.y) ? node.position.y : 160,
+      },
+    })),
+    edges: (graph.edges ?? []).filter((edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId)),
+  };
+}
+
+function normalizeLevel(level: GameLevel): GameLevel {
+  return {
+    ...level,
+    storyGraph: normalizeStoryGraph(level.storyGraph),
+    zombieSpawns: level.zombieSpawns ?? [],
+    placedObjects: level.placedObjects ?? [],
+  };
+}
+
+function normalizeWeaponLoadouts(input?: Partial<Record<WeaponType, Partial<WeaponLoadout>>>) {
+  return (Object.keys(DEFAULT_WEAPON_LOADOUTS) as WeaponType[]).reduce((acc, weapon) => {
+    const defaults = DEFAULT_WEAPON_LOADOUTS[weapon];
+    const saved = input?.[weapon];
+    acc[weapon] = {
+      ...defaults,
+      ...saved,
+      transform: {
+        ...defaults.transform,
+        ...saved?.transform,
+      },
+      actionTransforms: {
+        ...defaults.actionTransforms,
+        ...saved?.actionTransforms,
+      },
+      hitbox: {
+        ...defaults.hitbox,
+        ...saved?.hitbox,
+      },
+    };
+    return acc;
+  }, {} as Record<WeaponType, WeaponLoadout>);
+}
+
 interface GameState {
   // Game Status
   status: GameStatus;
@@ -163,6 +380,10 @@ interface GameState {
   enemySpawnVersion: number;
   selectedWeapon: WeaponType;
   ownedWeapons: WeaponType[];
+  weaponLoadouts: Record<WeaponType, WeaponLoadout>;
+  bowAim: BowAimState;
+  bowFireHeld: boolean;
+  arrows: ArrowProjectileState[];
 
   // Enemies / NPCs
   enemies: EnemyState[];
@@ -187,6 +408,13 @@ interface GameState {
   triggerAttackEnd: () => void;
   purchaseItem: (item: WeaponType) => boolean;
   equipWeapon: (weapon: WeaponType) => void;
+  loadWeaponLoadouts: () => void;
+  updateWeaponLoadout: (weapon: WeaponType, loadout: WeaponLoadout) => void;
+  setBowAim: (aim: BowAimState) => void;
+  clearBowAim: () => void;
+  setBowFireHeld: (held: boolean) => void;
+  spawnArrow: (arrow: Omit<ArrowProjectileState, "id" | "createdAt">) => void;
+  removeArrow: (id: string) => void;
   
   // Enemy Management
   spawnEnemies: () => void;
@@ -290,6 +518,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   enemySpawnVersion: 0,
   selectedWeapon: "sword",
   ownedWeapons: ["sword"],
+  weaponLoadouts: DEFAULT_WEAPON_LOADOUTS,
+  bowAim: EMPTY_BOW_AIM,
+  bowFireHeld: false,
+  arrows: [],
 
   enemies: [],
   robotPosition: ROBOT_SPAWN_POSITION,
@@ -309,7 +541,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       nextLevelXp: 100,
       playerHp: 100,
       playerMaxHp: 100,
-      playerPosition: [...PLAYER_SPAWN_POSITION],
+      playerPosition: [...state.activeLevel.playerSpawn],
       playerVelocity: [0, 0, 0],
       playerTargetMove: null,
       isPlayerAttacking: false,
@@ -318,6 +550,9 @@ export const useGameStore = create<GameState>((set, get) => ({
       activeDialogueNpcId: null,
       dialogueNode: null,
       floatingDamages: [],
+      bowAim: EMPTY_BOW_AIM,
+      bowFireHeld: false,
+      arrows: [],
       worldVersion: state.worldVersion + 1,
     }));
     get().spawnEnemies();
@@ -374,13 +609,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   triggerAttackEnd: () => set({ isPlayerAttacking: false }),
 
   purchaseItem: (item) => {
-    const costs: Record<WeaponType, number> = { sword: 0, bow: 200, greatsword: 450 };
     const state = get();
     if (state.ownedWeapons.includes(item)) {
       set({ selectedWeapon: item });
       return true;
     }
-    const cost = costs[item];
+    const cost = weaponCatalog[item].cost;
     if (state.score < cost) {
       return false;
     }
@@ -397,11 +631,63 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ selectedWeapon: weapon });
   },
 
+  loadWeaponLoadouts: () => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(WEAPON_LOADOUTS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Record<WeaponType, Partial<WeaponLoadout>>>;
+      set({
+        weaponLoadouts: normalizeWeaponLoadouts(parsed),
+      });
+    } catch {
+      set({ weaponLoadouts: DEFAULT_WEAPON_LOADOUTS });
+    }
+  },
+
+  updateWeaponLoadout: (weapon, loadout) => {
+    set((state) => {
+      const weaponLoadouts = {
+        ...state.weaponLoadouts,
+        [weapon]: loadout,
+      };
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(WEAPON_LOADOUTS_STORAGE_KEY, JSON.stringify(weaponLoadouts));
+      }
+      return { weaponLoadouts };
+    });
+  },
+
+  setBowAim: (aim) => set({ bowAim: aim }),
+  clearBowAim: () => set({ bowAim: EMPTY_BOW_AIM }),
+  setBowFireHeld: (held) => set({ bowFireHeld: held }),
+  spawnArrow: (arrow) => {
+    const id = `arrow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    set((state) => ({
+      arrows: [
+        ...state.arrows,
+        {
+          ...arrow,
+          id,
+          createdAt: window.performance.now(),
+        },
+      ],
+    }));
+  },
+  removeArrow: (id) => {
+    set((state) => ({
+      arrows: state.arrows.filter((arrow) => arrow.id !== id),
+    }));
+  },
+
   spawnEnemies: () => {
     set((state) => ({
       playerPosition: [...state.activeLevel.playerSpawn],
       robotPosition: [...state.activeLevel.robotSpawn],
       enemies: createEnemiesFromLevel(state.activeLevel),
+      bowAim: EMPTY_BOW_AIM,
+      bowFireHeld: false,
+      arrows: [],
       enemySpawnVersion: state.enemySpawnVersion + 1,
     }));
   },
@@ -477,7 +763,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       const response = await fetch("/api/levels", { cache: "no-store" });
       const payload = await response.json();
       if (response.ok && payload?.success && Array.isArray(payload.data)) {
-        const savedLevels = payload.data as GameLevel[];
+        const savedLevels = (payload.data as GameLevel[]).map(normalizeLevel);
         window.localStorage.setItem(CUSTOM_LEVELS_STORAGE_KEY, JSON.stringify(savedLevels));
         set({ savedLevels });
         return;
@@ -488,7 +774,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     try {
       const raw = window.localStorage.getItem(CUSTOM_LEVELS_STORAGE_KEY);
-      const savedLevels = raw ? (JSON.parse(raw) as GameLevel[]) : [];
+      const savedLevels = raw ? (JSON.parse(raw) as GameLevel[]).map(normalizeLevel) : [];
       set({ savedLevels });
     } catch {
       set({ savedLevels: [] });
@@ -497,15 +783,18 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setActiveLevel: (levelId) => {
     const state = get();
-    const activeLevel = levelId === DEFAULT_LEVEL.id
+    const activeLevel = normalizeLevel(levelId === DEFAULT_LEVEL.id
       ? DEFAULT_LEVEL
-      : state.savedLevels.find((level) => level.id === levelId) ?? DEFAULT_LEVEL;
+      : state.savedLevels.find((level) => level.id === levelId) ?? DEFAULT_LEVEL);
 
     set((current) => ({
       activeLevel,
       playerPosition: [...activeLevel.playerSpawn],
       robotPosition: [...activeLevel.robotSpawn],
       floatingDamages: [],
+      bowAim: EMPTY_BOW_AIM,
+      bowFireHeld: false,
+      arrows: [],
       worldVersion: current.worldVersion + 1,
     }));
     get().spawnEnemies();
@@ -516,6 +805,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const now = new Date().toISOString();
     const fallbackLevel: GameLevel = {
       ...input,
+      storyGraph: normalizeStoryGraph(input.storyGraph),
       id: input.id || `level-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: input.id ? get().savedLevels.find((entry) => entry.id === input.id)?.createdAt ?? now : now,
       updatedAt: now,
@@ -529,7 +819,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       });
       const payload = await response.json();
       if (response.ok && payload?.success) {
-        const level = payload.data as GameLevel;
+        const level = normalizeLevel(payload.data as GameLevel);
         const savedLevels = [
           ...get().savedLevels.filter((entry) => entry.id !== level.id),
           level,
