@@ -1,10 +1,25 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+} from "react";
 import { Canvas, type ThreeEvent } from "@react-three/fiber";
-import { Grid, Html, OrbitControls, TransformControls } from "@react-three/drei";
+import {
+  Grid,
+  Html,
+  OrbitControls,
+  TransformControls,
+} from "@react-three/drei";
 import * as THREE from "three";
-import { ModelLoader } from "@/components/3d/ModelLoader";
+import { ModelLoader, getRenderableBounds } from "@/components/3d/ModelLoader";
+import { log3DDebug } from "@/lib/3d/debug";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 import { StoryGraphPanel } from "./StoryGraphPanel";
 import { DialogueSystem } from "./DialogueSystem";
@@ -42,9 +57,18 @@ type AssetLibraryItem = {
 const DEFAULT_MAP_URL = "";
 const PLAYER_SPAWN_OFFSET = 1.5;
 const EDITOR_MAP_MAX_SIZE = 92;
-const MAP_CHARACTER_HEIGHT = 0.8;
-const MAP_OBJECT_MAX_SIZE = 1.0;
-const weaponActionPoses: WeaponActionPose[] = ["default", "idle", "walk", "run", "attack", "slash", "kick", "block"];
+const MAP_CHARACTER_HEIGHT = 1.85;
+const MAP_OBJECT_MAX_SIZE = 1.8;
+const weaponActionPoses: WeaponActionPose[] = [
+  "default",
+  "idle",
+  "walk",
+  "run",
+  "attack",
+  "slash",
+  "kick",
+  "block",
+];
 
 const EMPTY_STORY_GRAPH: StoryGraph = {
   nodes: [
@@ -60,13 +84,14 @@ const EMPTY_STORY_GRAPH: StoryGraph = {
   variables: [],
 };
 
-
 type MapRelativeScale = {
+  gameplayRatio: number;
   characterHeight: number;
   objectMaxSize: number;
 };
 
 const DEFAULT_MAP_RELATIVE_SCALE: MapRelativeScale = {
+  gameplayRatio: 1,
   characterHeight: MAP_CHARACTER_HEIGHT,
   objectMaxSize: MAP_OBJECT_MAX_SIZE,
 };
@@ -77,7 +102,8 @@ function formatVector(position: [number, number, number]) {
 
 function parseVector(value: string): [number, number, number] | null {
   const parts = value.split(",").map((entry) => Number(entry.trim()));
-  if (parts.length !== 3 || parts.some((entry) => !Number.isFinite(entry))) return null;
+  if (parts.length !== 3 || parts.some((entry) => !Number.isFinite(entry)))
+    return null;
   return [parts[0], parts[1], parts[2]];
 }
 
@@ -104,7 +130,9 @@ function buildEditableLevel(source?: GameLevel) {
     name: source?.name ?? "Custom Sector",
     mapModelUrl: source?.mapModelUrl ?? DEFAULT_MAP_URL,
     playerCharacter: source?.playerCharacter ?? null,
-    playerSpawn: formatVector(source?.playerSpawn ?? [0, PLAYER_SPAWN_OFFSET, 0]),
+    playerSpawn: formatVector(
+      source?.playerSpawn ?? [0, PLAYER_SPAWN_OFFSET, 0],
+    ),
     robotSpawn: formatVector(source?.robotSpawn ?? [0, 0, 0]),
     robotStory: source?.robotStory ?? "",
     storyGraph: normalizeStoryGraph(source?.storyGraph),
@@ -116,7 +144,10 @@ function buildEditableLevel(source?: GameLevel) {
 function normalizeStoryGraph(graph?: StoryGraph | null): StoryGraph {
   if (!graph?.nodes?.length) {
     return {
-      nodes: EMPTY_STORY_GRAPH.nodes.map((node) => ({ ...node, position: { ...node.position } })),
+      nodes: EMPTY_STORY_GRAPH.nodes.map((node) => ({
+        ...node,
+        position: { ...node.position },
+      })),
       edges: [],
       variables: [],
     };
@@ -131,7 +162,9 @@ function normalizeStoryGraph(graph?: StoryGraph | null): StoryGraph {
         y: Number.isFinite(node.position?.y) ? node.position.y : 160,
       },
     })),
-    edges: (graph.edges ?? []).filter((edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId)),
+    edges: (graph.edges ?? []).filter(
+      (edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId),
+    ),
     variables: graph.variables || [],
   };
 }
@@ -185,36 +218,81 @@ function BuilderModelViewer({
 
   return (
     <div className={`builder-model-viewer${compact ? " compact" : ""}`}>
-      <Canvas camera={{ position: [1.8, 1.25, 2.4], fov: 36 }} dpr={[1, compact ? 1 : 1.5]} frameloop="demand">
+      <Canvas
+        camera={{ position: [1.8, 1.25, 2.4], fov: 36 }}
+        dpr={[1, compact ? 1 : 1.5]}
+        frameloop="demand"
+      >
         <color attach="background" args={["#111827"]} />
         <ambientLight intensity={0.85} />
         <directionalLight intensity={1.9} position={[3, 4, 3]} />
         <Suspense fallback={null}>
-          <ModelLoader fitHeight={fitHeight} fitMaxSize={fitMaxSize} groundToY={0} src={src} onSceneReady={setModelRoot} />
+          <ModelLoader
+            debugLabel={
+              compact
+                ? "builder-model-preview-compact"
+                : "builder-model-preview"
+            }
+            fitHeight={fitHeight}
+            fitMaxSize={fitMaxSize}
+            groundToY={0}
+            src={src}
+            onSceneReady={setModelRoot}
+          />
         </Suspense>
         <ThumbnailAutoFit controlsRef={controlsRef} model={modelRoot} />
-        <OrbitControls ref={controlsRef} enablePan={false} enableZoom={interactive} enableRotate={interactive} makeDefault />
+        <OrbitControls
+          ref={controlsRef}
+          enablePan={false}
+          enableZoom={interactive}
+          enableRotate={interactive}
+          makeDefault
+        />
       </Canvas>
     </div>
   );
 }
 
-
-function groundMarkerPosition(position: [number, number, number], offset: number): [number, number, number] {
+function groundMarkerPosition(
+  position: [number, number, number],
+  offset: number,
+): [number, number, number] {
   return [position[0], Number((position[1] - offset).toFixed(2)), position[2]];
 }
 
-function getMapRelativeScale(mapObject: THREE.Object3D | null): MapRelativeScale {
+function getMapRelativeScale(
+  mapObject: THREE.Object3D | null,
+): MapRelativeScale {
   if (!mapObject) return DEFAULT_MAP_RELATIVE_SCALE;
-  const scaleRatio = mapObject.scale.x;
-  const scale = {
-    characterHeight: 1.85 * scaleRatio,
-    objectMaxSize: 1.8 * scaleRatio,
-  };
-  console.log("[antigravity-debug] getMapRelativeScale:", {
-    scaleRatio,
-    scale
+  const bounds = getRenderableBounds(mapObject, {
+    debugLabel: "builder-map-relative-scale",
+    loader: "builder-terrain",
+    phase: "map-relative-scale",
   });
+  if (bounds.isEmpty()) return DEFAULT_MAP_RELATIVE_SCALE;
+  const size = bounds.getSize(new THREE.Vector3());
+  const horizontalSpan = Math.max(size.x, size.z);
+  const scaleRatio =
+    horizontalSpan > 0.0001
+      ? THREE.MathUtils.clamp(horizontalSpan / EDITOR_MAP_MAX_SIZE, 0.5, 1.5)
+      : 1;
+  const scale = {
+    gameplayRatio: scaleRatio,
+    characterHeight: MAP_CHARACTER_HEIGHT * scaleRatio,
+    objectMaxSize: MAP_OBJECT_MAX_SIZE * scaleRatio,
+  };
+  log3DDebug(
+    `builder-map-scale:${mapObject.uuid}`,
+    "Builder map-relative scale",
+    {
+      mapSize: [size.x, size.y, size.z].map((value) =>
+        Number(value.toFixed(4)),
+      ),
+      horizontalSpan: Number(horizontalSpan.toFixed(4)),
+      scale,
+    },
+    { once: true },
+  );
   return scale;
 }
 
@@ -226,8 +304,11 @@ function getObjectBounds(object: THREE.Object3D | null) {
 }
 
 function sameMapRelativeScale(a: MapRelativeScale, b: MapRelativeScale) {
-  return Math.abs(a.characterHeight - b.characterHeight) < 0.001
-    && Math.abs(a.objectMaxSize - b.objectMaxSize) < 0.001;
+  return (
+    Math.abs(a.gameplayRatio - b.gameplayRatio) < 0.001 &&
+    Math.abs(a.characterHeight - b.characterHeight) < 0.001 &&
+    Math.abs(a.objectMaxSize - b.objectMaxSize) < 0.001
+  );
 }
 
 function PlayerMarker({
@@ -263,18 +344,34 @@ function PlayerMarker({
         }}
       >
         <Suspense fallback={null}>
-          <ModelLoader fitHeight={fitHeight} groundToY={0} src={modelSrc} />
+          <ModelLoader
+            debugLabel="builder-player-marker"
+            fitHeight={fitHeight}
+            groundToY={0}
+            src={modelSrc}
+          />
         </Suspense>
         {selected ? (
           <mesh>
-            <boxGeometry args={[fitHeight * 0.42, fitHeight, fitHeight * 0.42]} />
-            <meshBasicMaterial color="#00ffc4" wireframe transparent opacity={0.75} />
+            <boxGeometry
+              args={[fitHeight * 0.42, fitHeight, fitHeight * 0.42]}
+            />
+            <meshBasicMaterial
+              color="#00ffc4"
+              wireframe
+              transparent
+              opacity={0.75}
+            />
           </mesh>
         ) : null}
         <MarkerLabel>PLAYER</MarkerLabel>
       </group>
       {selected && groupRef.current ? (
-        <TransformControls object={groupRef.current} mode="translate" onMouseUp={commitTransform} />
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          onMouseUp={commitTransform}
+        />
       ) : null}
     </>
   );
@@ -316,7 +413,13 @@ function PlacedObjectMarker({
       <group
         ref={groupRef}
         position={object.position}
-        rotation={object.rotation.map((value) => THREE.MathUtils.degToRad(value)) as [number, number, number]}
+        rotation={
+          object.rotation.map((value) => THREE.MathUtils.degToRad(value)) as [
+            number,
+            number,
+            number,
+          ]
+        }
         scale={object.scale}
         onClick={(event) => {
           event.stopPropagation();
@@ -324,19 +427,33 @@ function PlacedObjectMarker({
         }}
       >
         <Suspense fallback={null}>
-          <ModelLoader fitMaxSize={adjustedSize} groundToY={0} src={object.fileUrl} />
+          <ModelLoader
+            debugLabel={`builder-placed-object:${object.name}`}
+            fitMaxSize={adjustedSize}
+            groundToY={0}
+            src={object.fileUrl}
+          />
         </Suspense>
         {selected ? (
           <mesh>
             <boxGeometry args={[adjustedSize, adjustedSize, adjustedSize]} />
-            <meshBasicMaterial color="#00ffc4" wireframe transparent opacity={0.7} />
+            <meshBasicMaterial
+              color="#00ffc4"
+              wireframe
+              transparent
+              opacity={0.7}
+            />
           </mesh>
         ) : null}
         <MarkerLabel>{object.name}</MarkerLabel>
       </group>
 
       {selected && groupRef.current ? (
-        <TransformControls object={groupRef.current} mode="translate" onMouseUp={commitTransform} />
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          onMouseUp={commitTransform}
+        />
       ) : null}
     </>
   );
@@ -356,22 +473,39 @@ function LevelBuilderViewport({
   setSelectedAssetId: Dispatch<SetStateAction<string>>;
 }) {
   const [placementTool, setPlacementTool] = useState<PlacementTool>("player");
-  console.log("[antigravity-debug] LevelBuilderViewport render:", {
-    mapModelUrl: draft.mapModelUrl,
-    playerCharacterUrl: draft.playerCharacter?.fileUrl,
-    placedObjectsCount: draft.placedObjects.length
-  });
+  log3DDebug(
+    "builder-viewport-render",
+    "LevelBuilderViewport render",
+    {
+      mapModelUrl: draft.mapModelUrl,
+      playerCharacterUrl: draft.playerCharacter?.fileUrl,
+      placedObjectsCount: draft.placedObjects.length,
+    },
+    { intervalMs: 1000 },
+  );
   const [selectedCoreId, setSelectedCoreId] = useState<"player" | "">("");
   const [selectedObjectId, setSelectedObjectId] = useState<string>("");
-  const [mapRelativeScale, setMapRelativeScale] = useState<MapRelativeScale>(DEFAULT_MAP_RELATIVE_SCALE);
+  const [mapRelativeScale, setMapRelativeScale] = useState<MapRelativeScale>(
+    DEFAULT_MAP_RELATIVE_SCALE,
+  );
   const terrainObjectRef = useRef<THREE.Object3D | null>(null);
   const terrainRaycasterRef = useRef(new THREE.Raycaster());
   const lastTerrainSnapKeyRef = useRef("");
   const lastMapSeedUrlRef = useRef("");
-  const currentMapScale = draft.mapModelUrl ? (terrainObjectRef.current?.scale.x ?? 1.0) : 1.0;
-  const playerSpawn = parseVector(draft.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET * currentMapScale, 0];
-  const selectedAsset = assetLibrary.find((asset) => asset.id === selectedAssetId);
-  const characterAssets = assetLibrary.filter((asset) => asset.category === "character");
+  const currentMapScale = draft.mapModelUrl
+    ? mapRelativeScale.gameplayRatio
+    : 1.0;
+  const playerSpawn = parseVector(draft.playerSpawn) ?? [
+    0,
+    PLAYER_SPAWN_OFFSET * currentMapScale,
+    0,
+  ];
+  const selectedAsset = assetLibrary.find(
+    (asset) => asset.id === selectedAssetId,
+  );
+  const characterAssets = assetLibrary.filter(
+    (asset) => asset.category === "character",
+  );
   const selectedPlayerCharacter = draft.playerCharacter;
 
   const setPlayerCharacter = (assetId: string) => {
@@ -379,12 +513,12 @@ function LevelBuilderViewport({
     setDraft((current) => ({
       ...current,
       playerCharacter: asset
-        ? {
+        ? ({
             modelId: asset.id,
             name: asset.name,
             fileUrl: asset.fileUrl,
             format: asset.format,
-          } satisfies LevelCharacter
+          } satisfies LevelCharacter)
         : null,
     }));
   };
@@ -401,17 +535,32 @@ function LevelBuilderViewport({
     terrain.updateMatrixWorld(true);
     const raycaster = terrainRaycasterRef.current;
     raycaster.set(new THREE.Vector3(x, 1000, z), new THREE.Vector3(0, -1, 0));
-    const hits = raycaster.intersectObject(terrain, true)
-      .filter((hit) => hit.object.userData.isTerrainSurface && !hit.object.userData.ignoreBuilderRaycast);
+    const hits = raycaster
+      .intersectObject(terrain, true)
+      .filter(
+        (hit) =>
+          hit.object.userData.isTerrainSurface &&
+          !hit.object.userData.ignoreBuilderRaycast,
+      );
     return hits[0]?.point.y ?? fallbackY;
   };
 
-  const getTerrainYAt = (terrain: THREE.Object3D, x: number, z: number, fallbackY = 0) => {
+  const getTerrainYAt = (
+    terrain: THREE.Object3D,
+    x: number,
+    z: number,
+    fallbackY = 0,
+  ) => {
     terrain.updateMatrixWorld(true);
     const raycaster = terrainRaycasterRef.current;
     raycaster.set(new THREE.Vector3(x, 1000, z), new THREE.Vector3(0, -1, 0));
-    const hits = raycaster.intersectObject(terrain, true)
-      .filter((hit) => hit.object.userData.isTerrainSurface && !hit.object.userData.ignoreBuilderRaycast);
+    const hits = raycaster
+      .intersectObject(terrain, true)
+      .filter(
+        (hit) =>
+          hit.object.userData.isTerrainSurface &&
+          !hit.object.userData.ignoreBuilderRaycast,
+      );
     return hits[0]?.point.y ?? fallbackY;
   };
 
@@ -426,13 +575,22 @@ function LevelBuilderViewport({
     const mapScale = scene.scale.x;
     setDraft((current) => ({
       ...current,
-      playerSpawn: formatVector([playerX, playerGround + PLAYER_SPAWN_OFFSET * mapScale, playerZ]),
+      playerSpawn: formatVector([
+        playerX,
+        playerGround + PLAYER_SPAWN_OFFSET * mapScale,
+        playerZ,
+      ]),
       zombieSpawns: [],
       placedObjects: [],
     }));
   };
 
-  const entityPosition = (x: number, z: number, heightOffset: number, fallbackY = 0): [number, number, number] => [
+  const entityPosition = (
+    x: number,
+    z: number,
+    heightOffset: number,
+    fallbackY = 0,
+  ): [number, number, number] => [
     Number(x.toFixed(2)),
     Number((getTerrainY(x, z, fallbackY) + heightOffset).toFixed(2)),
     Number(z.toFixed(2)),
@@ -447,7 +605,14 @@ function LevelBuilderViewport({
 
     if (placementTool === "player") {
       if (!selectedPlayerCharacter?.fileUrl) return;
-      setDraft((current) => ({ ...current, playerSpawn: formatVector([x, terrainY + PLAYER_SPAWN_OFFSET * currentMapScale, z]) }));
+      setDraft((current) => ({
+        ...current,
+        playerSpawn: formatVector([
+          x,
+          terrainY + PLAYER_SPAWN_OFFSET * currentMapScale,
+          z,
+        ]),
+      }));
       return;
     }
     if (placementTool === "object" && selectedAsset) {
@@ -460,12 +625,12 @@ function LevelBuilderViewport({
           {
             id,
             modelId: selectedAsset.id,
-              name: selectedAsset.name,
-              fileUrl: selectedAsset.fileUrl,
-              position: [x, terrainY, z],
-              rotation: [0, 0, 0],
-              scale: [0.75, 0.75, 0.75],
-            },
+            name: selectedAsset.name,
+            fileUrl: selectedAsset.fileUrl,
+            position: [x, terrainY, z],
+            rotation: [0, 0, 0],
+            scale: [0.75, 0.75, 0.75],
+          },
         ],
       }));
     }
@@ -481,11 +646,14 @@ function LevelBuilderViewport({
     placeAt(event.point);
   };
 
-  const updatePlacedObject = (objectId: string, updates: Partial<PlacedObject>) => {
+  const updatePlacedObject = (
+    objectId: string,
+    updates: Partial<PlacedObject>,
+  ) => {
     setDraft((current) => ({
       ...current,
       placedObjects: current.placedObjects.map((object) =>
-        object.id === objectId ? { ...object, ...updates } : object
+        object.id === objectId ? { ...object, ...updates } : object,
       ),
     }));
   };
@@ -493,7 +661,9 @@ function LevelBuilderViewport({
   const removePlacedObject = (objectId: string) => {
     setDraft((current) => ({
       ...current,
-      placedObjects: current.placedObjects.filter((object) => object.id !== objectId),
+      placedObjects: current.placedObjects.filter(
+        (object) => object.id !== objectId,
+      ),
     }));
     if (selectedObjectId === objectId) setSelectedObjectId("");
   };
@@ -502,13 +672,29 @@ function LevelBuilderViewport({
     if (!terrainObjectRef.current) return;
     const mapScale = terrainObjectRef.current.scale.x;
     setDraft((current) => {
-      const currentPlayerSpawn = parseVector(current.playerSpawn) ?? [0, PLAYER_SPAWN_OFFSET * mapScale, 5];
+      const currentPlayerSpawn = parseVector(current.playerSpawn) ?? [
+        0,
+        PLAYER_SPAWN_OFFSET * mapScale,
+        5,
+      ];
       return {
         ...current,
-        playerSpawn: formatVector(entityPosition(currentPlayerSpawn[0], currentPlayerSpawn[2], PLAYER_SPAWN_OFFSET * mapScale, currentPlayerSpawn[1] - PLAYER_SPAWN_OFFSET * mapScale)),
+        playerSpawn: formatVector(
+          entityPosition(
+            currentPlayerSpawn[0],
+            currentPlayerSpawn[2],
+            PLAYER_SPAWN_OFFSET * mapScale,
+            currentPlayerSpawn[1] - PLAYER_SPAWN_OFFSET * mapScale,
+          ),
+        ),
         placedObjects: current.placedObjects.map((object) => ({
           ...object,
-          position: entityPosition(object.position[0], object.position[2], 0, object.position[1]),
+          position: entityPosition(
+            object.position[0],
+            object.position[2],
+            0,
+            object.position[1],
+          ),
         })),
       };
     });
@@ -520,7 +706,9 @@ function LevelBuilderViewport({
         <section className="builder-player-panel">
           <header>
             <strong>Player character</strong>
-            <span>{selectedPlayerCharacter?.format?.toUpperCase() ?? "NONE"}</span>
+            <span>
+              {selectedPlayerCharacter?.format?.toUpperCase() ?? "NONE"}
+            </span>
           </header>
           {selectedPlayerCharacter?.fileUrl ? (
             <BuilderModelViewer
@@ -528,17 +716,26 @@ function LevelBuilderViewport({
               src={selectedPlayerCharacter.fileUrl}
             />
           ) : (
-            <p className="builder-empty-note">Choose a registered character before placing a player.</p>
+            <p className="builder-empty-note">
+              Choose a registered character before placing a player.
+            </p>
           )}
           <div className="builder-character-grid">
             {characterAssets.map((asset) => (
               <button
-                className={selectedPlayerCharacter?.modelId === asset.id ? "active" : ""}
+                className={
+                  selectedPlayerCharacter?.modelId === asset.id ? "active" : ""
+                }
                 key={asset.id}
                 onClick={() => setPlayerCharacter(asset.id)}
                 type="button"
               >
-                <BuilderModelViewer compact fitHeight={0.95} interactive={false} src={asset.fileUrl} />
+                <BuilderModelViewer
+                  compact
+                  fitHeight={0.95}
+                  interactive={false}
+                  src={asset.fileUrl}
+                />
                 <span>{asset.name}</span>
               </button>
             ))}
@@ -548,7 +745,9 @@ function LevelBuilderViewport({
           Add
           <select
             value={placementTool}
-            onChange={(event) => setPlacementTool(event.target.value as PlacementTool)}
+            onChange={(event) =>
+              setPlacementTool(event.target.value as PlacementTool)
+            }
           >
             <option value="player">Player</option>
             <option value="object">Uploaded Model</option>
@@ -569,10 +768,17 @@ function LevelBuilderViewport({
                     onClick={() => setSelectedAssetId(asset.id)}
                     type="button"
                   >
-                    <BuilderModelViewer compact fitMaxSize={0.95} interactive={false} src={asset.fileUrl} />
+                    <BuilderModelViewer
+                      compact
+                      fitMaxSize={0.95}
+                      interactive={false}
+                      src={asset.fileUrl}
+                    />
                     <span>
                       <strong>{asset.name}</strong>
-                      <small>{asset.format?.toUpperCase() ?? asset.category}</small>
+                      <small>
+                        {asset.format?.toUpperCase() ?? asset.category}
+                      </small>
                     </span>
                   </button>
                 ))}
@@ -611,7 +817,12 @@ function LevelBuilderViewport({
                     }}
                     type="button"
                   >
-                    <BuilderModelViewer compact fitMaxSize={0.95} interactive={false} src={object.fileUrl} />
+                    <BuilderModelViewer
+                      compact
+                      fitMaxSize={0.95}
+                      interactive={false}
+                      src={object.fileUrl}
+                    />
                     <span>
                       <strong>{object.name}</strong>
                       <small>{object.scale[0].toFixed(2)}x</small>
@@ -623,7 +834,8 @@ function LevelBuilderViewport({
                       value={formatVector(object.scale)}
                       onChange={(event) => {
                         const parsed = parseVector(event.target.value);
-                        if (parsed) updatePlacedObject(object.id, { scale: parsed });
+                        if (parsed)
+                          updatePlacedObject(object.id, { scale: parsed });
                       }}
                     >
                       <option value="0.35, 0.35, 0.35">Tiny</option>
@@ -631,7 +843,11 @@ function LevelBuilderViewport({
                       <option value="0.75, 0.75, 0.75">Normal</option>
                       <option value="1, 1, 1">Large</option>
                     </select>
-                    <button className="danger" onClick={() => removePlacedObject(object.id)} type="button">
+                    <button
+                      className="danger"
+                      onClick={() => removePlacedObject(object.id)}
+                      type="button"
+                    >
                       Remove
                     </button>
                   </div>
@@ -645,24 +861,34 @@ function LevelBuilderViewport({
       </aside>
 
       <div className="builder-viewport">
-          <div className="builder-viewport-meta">
+        <div className="builder-viewport-meta">
           <strong>
             {placementTool === "object"
-              ? selectedAsset?.name ?? "Select a model"
+              ? (selectedAsset?.name ?? "Select a model")
               : selectedPlayerCharacter
                 ? "Click ground to place player"
                 : "Choose player character"}
           </strong>
         </div>
-        <Canvas camera={{ position: [16, 14, 20], fov: 48 }} shadows="percentage">
+        <Canvas
+          camera={{ position: [16, 14, 20], fov: 48 }}
+          shadows="percentage"
+        >
           <color attach="background" args={["#070b16"]} />
           <ambientLight intensity={0.65} />
           <directionalLight castShadow intensity={1.8} position={[8, 16, 10]} />
-          <Grid args={[EDITOR_MAP_MAX_SIZE, EDITOR_MAP_MAX_SIZE]} cellColor="#203047" sectionColor="#00ffc4" position={[0, -0.02, 0]} visible={false} />
+          <Grid
+            args={[EDITOR_MAP_MAX_SIZE, EDITOR_MAP_MAX_SIZE]}
+            cellColor="#203047"
+            sectionColor="#00ffc4"
+            position={[0, -0.02, 0]}
+            visible={false}
+          />
           <Suspense fallback={null}>
             {draft.mapModelUrl ? (
               <group position={[0, 0, 0]} scale={[1, 1, 1]}>
                 <ModelLoader
+                  debugLabel="builder-terrain"
                   fitMaxSize={EDITOR_MAP_MAX_SIZE}
                   groundToY={0}
                   markAsTerrain
@@ -670,17 +896,31 @@ function LevelBuilderViewport({
                   onSceneReady={(scene) => {
                     terrainObjectRef.current = scene;
                     const nextScale = getMapRelativeScale(scene);
-                    console.log("[antigravity-debug] Editor Terrain Loaded:", {
-                      sceneName: scene?.name,
-                      sceneScaleX: scene?.scale.x,
-                      nextScale
-                    });
+                    log3DDebug(
+                      `builder-terrain-ready:${draft.mapModelUrl}`,
+                      "Builder terrain ready",
+                      {
+                        sceneName: scene?.name,
+                        sceneScale: scene
+                          ? [scene.scale.x, scene.scale.y, scene.scale.z].map(
+                              (value) => Number(value.toFixed(4)),
+                            )
+                          : null,
+                        nextScale,
+                      },
+                      { once: true },
+                    );
                     setMapRelativeScale((current) =>
-                      sameMapRelativeScale(current, nextScale) ? current : nextScale,
+                      sameMapRelativeScale(current, nextScale)
+                        ? current
+                        : nextScale,
                     );
                     if (!lastMapSeedUrlRef.current) {
                       lastMapSeedUrlRef.current = draft.mapModelUrl;
-                    } else if (scene && lastMapSeedUrlRef.current !== draft.mapModelUrl) {
+                    } else if (
+                      scene &&
+                      lastMapSeedUrlRef.current !== draft.mapModelUrl
+                    ) {
                       lastMapSeedUrlRef.current = draft.mapModelUrl;
                       reseedSpawnForMap(scene);
                       return;
@@ -696,23 +936,43 @@ function LevelBuilderViewport({
               </group>
             ) : null}
           </Suspense>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={handleGroundClick} receiveShadow>
+          <mesh
+            rotation={[-Math.PI / 2, 0, 0]}
+            onClick={handleGroundClick}
+            receiveShadow
+          >
             <planeGeometry args={[120, 120]} />
-            <meshStandardMaterial color="#0b1224" transparent opacity={0} side={THREE.DoubleSide} />
+            <meshStandardMaterial
+              color="#0b1224"
+              transparent
+              opacity={0}
+              side={THREE.DoubleSide}
+            />
           </mesh>
           {selectedPlayerCharacter?.fileUrl ? (
             <PlayerMarker
               fitHeight={mapRelativeScale.characterHeight}
               modelSrc={selectedPlayerCharacter.fileUrl}
               onCommit={(position) => {
-                const snapped = entityPosition(position[0], position[2], PLAYER_SPAWN_OFFSET * currentMapScale, position[1]);
-                setDraft((current) => ({ ...current, playerSpawn: formatVector(snapped) }));
+                const snapped = entityPosition(
+                  position[0],
+                  position[2],
+                  PLAYER_SPAWN_OFFSET * currentMapScale,
+                  position[1],
+                );
+                setDraft((current) => ({
+                  ...current,
+                  playerSpawn: formatVector(snapped),
+                }));
               }}
               onSelect={() => {
                 setSelectedCoreId("player");
                 setSelectedObjectId("");
               }}
-              position={groundMarkerPosition(playerSpawn, PLAYER_SPAWN_OFFSET * currentMapScale)}
+              position={groundMarkerPosition(
+                playerSpawn,
+                PLAYER_SPAWN_OFFSET * currentMapScale,
+              )}
               selected={selectedCoreId === "player"}
             />
           ) : null}
@@ -723,9 +983,17 @@ function LevelBuilderViewport({
               object={object}
               onCommit={(updates) => {
                 const position = updates.position
-                  ? entityPosition(updates.position[0], updates.position[2], 0, updates.position[1])
+                  ? entityPosition(
+                      updates.position[0],
+                      updates.position[2],
+                      0,
+                      updates.position[1],
+                    )
                   : undefined;
-                updatePlacedObject(object.id, { ...updates, ...(position ? { position } : {}) });
+                updatePlacedObject(object.id, {
+                  ...updates,
+                  ...(position ? { position } : {}),
+                });
               }}
               onSelect={() => {
                 setSelectedCoreId("");
@@ -747,7 +1015,13 @@ function requestGameFullscreen() {
   document.documentElement.requestFullscreen?.().catch(() => undefined);
 }
 
-function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => void }) {
+function MapsPanel({
+  onNewMap,
+  onPlay,
+}: {
+  onNewMap: () => void;
+  onPlay: () => void;
+}) {
   const activeLevel = useGameStore((state) => state.activeLevel);
   const savedLevels = useGameStore((state) => state.savedLevels);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
@@ -765,7 +1039,10 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
         <div>
           <span>GAME SETTINGS</span>
           <h2>All Games</h2>
-          <p>Choose a game map, then open gameplay preview or move into the editor tabs.</p>
+          <p>
+            Choose a game map, then open gameplay preview or move into the
+            editor tabs.
+          </p>
         </div>
         <div className="level-actions">
           <button type="button" onClick={onNewMap}>
@@ -777,7 +1054,10 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
         {!uniqueLevels.length ? (
           <article className="level-card">
             <h3>No maps yet</h3>
-            <p>Create a new map, upload/select terrain, then add registered models from the editor.</p>
+            <p>
+              Create a new map, upload/select terrain, then add registered
+              models from the editor.
+            </p>
             <div className="level-actions">
               <button type="button" onClick={onNewMap}>
                 New Map
@@ -786,7 +1066,10 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
           </article>
         ) : null}
         {uniqueLevels.map((level) => (
-          <article className={`level-card${level.id === activeLevel.id ? " active" : ""}`} key={level.id}>
+          <article
+            className={`level-card${level.id === activeLevel.id ? " active" : ""}`}
+            key={level.id}
+          >
             <h3>{level.name}</h3>
             <p>{level.mapModelUrl ? "Custom map" : "Map not selected yet"}</p>
             <div className="level-meta">
@@ -794,10 +1077,20 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
               <span>{level.playerCharacter?.name ?? "No player"}</span>
             </div>
             <div className="level-actions">
-              <button type="button" onClick={() => { setActiveLevel(level.id); onPlay(); }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveLevel(level.id);
+                  onPlay();
+                }}
+              >
                 Play
               </button>
-              <button className="danger" type="button" onClick={() => deleteCustomLevel(level.id)}>
+              <button
+                className="danger"
+                type="button"
+                onClick={() => deleteCustomLevel(level.id)}
+              >
                 Delete
               </button>
             </div>
@@ -807,8 +1100,6 @@ function MapsPanel({ onNewMap, onPlay }: { onNewMap: () => void; onPlay: () => v
     </section>
   );
 }
-
-
 
 function LevelEditorPanel({
   onPlay,
@@ -830,15 +1121,22 @@ function LevelEditorPanel({
   const [mapUploadError, setMapUploadError] = useState<string | null>(null);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
 
-
   const mapAssets = assetLibrary.filter((asset) => {
-    const format = asset.format?.toLowerCase() ?? asset.fileUrl.split(".").pop()?.toLowerCase();
-    return asset.category === "environment" || asset.category === "architecture" || format === "glb" || format === "gltf" || format === "fbx";
+    const format =
+      asset.format?.toLowerCase() ??
+      asset.fileUrl.split(".").pop()?.toLowerCase();
+    return (
+      asset.category === "environment" ||
+      asset.category === "architecture" ||
+      format === "glb" ||
+      format === "gltf" ||
+      format === "fbx"
+    );
   });
 
   const refreshAssets = async () => {
     const response = await fetch("/api/models", { cache: "no-store" });
-    const payload = await response.json().catch(() => null) as {
+    const payload = (await response.json().catch(() => null)) as {
       success?: boolean;
       data?: AssetLibraryItem[];
     } | null;
@@ -862,7 +1160,7 @@ function LevelEditorPanel({
         method: "POST",
         body: formData,
       });
-      const payload = await response.json().catch(() => null) as {
+      const payload = (await response.json().catch(() => null)) as {
         success?: boolean;
         data?: AssetLibraryItem;
         error?: string;
@@ -871,7 +1169,10 @@ function LevelEditorPanel({
         setMapUploadError(payload?.error ?? "Map upload failed");
         return;
       }
-      setDraft((current) => ({ ...current, mapModelUrl: payload.data?.fileUrl ?? current.mapModelUrl }));
+      setDraft((current) => ({
+        ...current,
+        mapModelUrl: payload.data?.fileUrl ?? current.mapModelUrl,
+      }));
       await refreshAssets();
     } finally {
       setIsUploadingMap(false);
@@ -886,12 +1187,22 @@ function LevelEditorPanel({
           <h2>{draft.name}</h2>
         </div>
         <div className="level-actions">
-          <button type="button" onClick={() => { void saveLevel(); }}>Save Level</button>
-          <button type="button" onClick={async () => {
-            const saved = await saveLevel();
-            if (saved) setActiveLevel(saved.id);
-            onPlay();
-          }}>
+          <button
+            type="button"
+            onClick={() => {
+              void saveLevel();
+            }}
+          >
+            Save Level
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const saved = await saveLevel();
+              if (saved) setActiveLevel(saved.id);
+              onPlay();
+            }}
+          >
             Preview
           </button>
         </div>
@@ -905,20 +1216,32 @@ function LevelEditorPanel({
         setSelectedAssetId={setSelectedAssetId}
       />
 
-
       <div className="editor-liquid-dock">
         <details className="editor-glass-section" open>
           <summary>Map</summary>
           <div className="editor-glass-grid">
             <label>
               Name
-              <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+              <input
+                value={draft.name}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+              />
             </label>
             <label>
               Active map
               <select
                 value={draft.mapModelUrl}
-                onChange={(event) => setDraft((current) => ({ ...current, mapModelUrl: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    mapModelUrl: event.target.value,
+                  }))
+                }
               >
                 <option value="">Choose map</option>
                 {mapAssets.map((asset) => (
@@ -941,7 +1264,9 @@ function LevelEditorPanel({
               />
             </label>
           </div>
-          {mapUploadError ? <p className="builder-empty-note">{mapUploadError}</p> : null}
+          {mapUploadError ? (
+            <p className="builder-empty-note">{mapUploadError}</p>
+          ) : null}
         </details>
       </div>
     </section>
@@ -953,18 +1278,23 @@ function PlayerWeaponEditorPanel() {
   const ownedWeapons = useGameStore((state) => state.ownedWeapons);
   const equipWeapon = useGameStore((state) => state.equipWeapon);
   const weaponLoadouts = useGameStore((state) => state.weaponLoadouts);
-  const updateWeaponLoadout = useGameStore((state) => state.updateWeaponLoadout);
+  const updateWeaponLoadout = useGameStore(
+    (state) => state.updateWeaponLoadout,
+  );
   const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
   const [weapon, setWeapon] = useState<WeaponType>(selectedWeapon);
   const [pose, setPose] = useState<WeaponActionPose>("default");
   const activeLoadout = weaponLoadouts[weapon];
-  const activeTransform = pose === "default"
-    ? activeLoadout.transform
-    : activeLoadout.actionTransforms[pose] ?? activeLoadout.transform;
+  const activeTransform =
+    pose === "default"
+      ? activeLoadout.transform
+      : (activeLoadout.actionTransforms[pose] ?? activeLoadout.transform);
   const transformInputs = transformToInputs(activeTransform);
   const hitboxInputs = hitboxToInputs(activeLoadout.hitbox);
   const weaponAssets = assetLibrary.filter((asset) => {
-    const format = asset.format?.toLowerCase() ?? asset.fileUrl.split(".").pop()?.toLowerCase();
+    const format =
+      asset.format?.toLowerCase() ??
+      asset.fileUrl.split(".").pop()?.toLowerCase();
     return format === "glb" || format === "gltf";
   });
 
@@ -1021,9 +1351,11 @@ function PlayerWeaponEditorPanel() {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
     const clamped =
-      field === "arcDegrees" ? Math.min(Math.max(parsed, 5), 180) :
-      field === "damageMultiplier" ? Math.min(Math.max(parsed, 0.1), 5) :
-      Math.max(parsed, 0);
+      field === "arcDegrees"
+        ? Math.min(Math.max(parsed, 5), 180)
+        : field === "damageMultiplier"
+          ? Math.min(Math.max(parsed, 0.1), 5)
+          : Math.max(parsed, 0);
     commitLoadout({
       hitbox: {
         ...activeLoadout.hitbox,
@@ -1038,7 +1370,10 @@ function PlayerWeaponEditorPanel() {
         <div>
           <span>PLAYER EDITOR</span>
           <h2>Weapon attachments</h2>
-          <p>Assign uploaded GLB weapons to player slots and tune per-action hand transforms.</p>
+          <p>
+            Assign uploaded GLB weapons to player slots and tune per-action hand
+            transforms.
+          </p>
         </div>
       </div>
 
@@ -1059,7 +1394,11 @@ function PlayerWeaponEditorPanel() {
               >
                 <span>{catalog.label}</span>
                 <strong>{loadout.name}</strong>
-                <small>{ownedWeapons.includes(weaponType) ? "Owned" : `${catalog.cost} score`}</small>
+                <small>
+                  {ownedWeapons.includes(weaponType)
+                    ? "Owned"
+                    : `${catalog.cost} score`}
+                </small>
               </button>
             );
           })}
@@ -1072,7 +1411,11 @@ function PlayerWeaponEditorPanel() {
               <h3>{activeLoadout.name}</h3>
               <p>{weaponCatalog[weapon].description}</p>
             </div>
-            <button type="button" onClick={() => equipWeapon(weapon)} disabled={!ownedWeapons.includes(weapon)}>
+            <button
+              type="button"
+              onClick={() => equipWeapon(weapon)}
+              disabled={!ownedWeapons.includes(weapon)}
+            >
               {selectedWeapon === weapon ? "Equipped" : "Equip"}
             </button>
           </div>
@@ -1083,9 +1426,15 @@ function PlayerWeaponEditorPanel() {
               <select
                 value={activeLoadout.modelId ?? ""}
                 onChange={(event) => {
-                  const asset = weaponAssets.find((entry) => entry.id === event.target.value);
+                  const asset = weaponAssets.find(
+                    (entry) => entry.id === event.target.value,
+                  );
                   if (!asset) {
-                    commitLoadout({ modelId: undefined, fileUrl: undefined, name: weaponCatalog[weapon].label });
+                    commitLoadout({
+                      modelId: undefined,
+                      fileUrl: undefined,
+                      name: weaponCatalog[weapon].label,
+                    });
                     return;
                   }
                   commitLoadout({
@@ -1106,7 +1455,12 @@ function PlayerWeaponEditorPanel() {
 
             <label>
               Action pose
-              <select value={pose} onChange={(event) => setPose(event.target.value as WeaponActionPose)}>
+              <select
+                value={pose}
+                onChange={(event) =>
+                  setPose(event.target.value as WeaponActionPose)
+                }
+              >
                 {weaponActionPoses.map((entry) => (
                   <option key={entry} value={entry}>
                     {entry === "default" ? "Default attach" : entry}
@@ -1119,48 +1473,91 @@ function PlayerWeaponEditorPanel() {
           <div className="weapon-transform-grid">
             <label>
               Position X, Y, Z
-              <input defaultValue={transformInputs.position} key={`${weapon}-${pose}-position`} onBlur={(event) => commitTransform("position", event.target.value)} />
+              <input
+                defaultValue={transformInputs.position}
+                key={`${weapon}-${pose}-position`}
+                onBlur={(event) =>
+                  commitTransform("position", event.target.value)
+                }
+              />
             </label>
             <label>
               Rotation X, Y, Z
-              <input defaultValue={transformInputs.rotation} key={`${weapon}-${pose}-rotation`} onBlur={(event) => commitTransform("rotation", event.target.value)} />
+              <input
+                defaultValue={transformInputs.rotation}
+                key={`${weapon}-${pose}-rotation`}
+                onBlur={(event) =>
+                  commitTransform("rotation", event.target.value)
+                }
+              />
             </label>
             <label>
               Scale X, Y, Z
-              <input defaultValue={transformInputs.scale} key={`${weapon}-${pose}-scale`} onBlur={(event) => commitTransform("scale", event.target.value)} />
+              <input
+                defaultValue={transformInputs.scale}
+                key={`${weapon}-${pose}-scale`}
+                onBlur={(event) => commitTransform("scale", event.target.value)}
+              />
             </label>
           </div>
 
           <div className="weapon-section-label">
             <span>Hitbox physics</span>
-            <small>Used by runtime combat while the player action is active.</small>
+            <small>
+              Used by runtime combat while the player action is active.
+            </small>
           </div>
 
           <div className="weapon-hitbox-grid">
             <label>
               Reach
-              <input defaultValue={hitboxInputs.reach} key={`${weapon}-hitbox-reach`} onBlur={(event) => commitHitbox("reach", event.target.value)} />
+              <input
+                defaultValue={hitboxInputs.reach}
+                key={`${weapon}-hitbox-reach`}
+                onBlur={(event) => commitHitbox("reach", event.target.value)}
+              />
             </label>
             <label>
               Radius
-              <input defaultValue={hitboxInputs.radius} key={`${weapon}-hitbox-radius`} onBlur={(event) => commitHitbox("radius", event.target.value)} />
+              <input
+                defaultValue={hitboxInputs.radius}
+                key={`${weapon}-hitbox-radius`}
+                onBlur={(event) => commitHitbox("radius", event.target.value)}
+              />
             </label>
             <label>
               Arc degrees
-              <input defaultValue={hitboxInputs.arcDegrees} key={`${weapon}-hitbox-arc`} onBlur={(event) => commitHitbox("arcDegrees", event.target.value)} />
+              <input
+                defaultValue={hitboxInputs.arcDegrees}
+                key={`${weapon}-hitbox-arc`}
+                onBlur={(event) =>
+                  commitHitbox("arcDegrees", event.target.value)
+                }
+              />
             </label>
             <label>
               Damage x
-              <input defaultValue={hitboxInputs.damageMultiplier} key={`${weapon}-hitbox-damage`} onBlur={(event) => commitHitbox("damageMultiplier", event.target.value)} />
+              <input
+                defaultValue={hitboxInputs.damageMultiplier}
+                key={`${weapon}-hitbox-damage`}
+                onBlur={(event) =>
+                  commitHitbox("damageMultiplier", event.target.value)
+                }
+              />
             </label>
           </div>
 
           <div className="weapon-editor-actions">
-            <button type="button" onClick={clearPoseOverride} disabled={pose === "default"}>
+            <button
+              type="button"
+              onClick={clearPoseOverride}
+              disabled={pose === "default"}
+            >
               Clear action override
             </button>
             <span>
-              Values update on blur. Open Play Game to preview the weapon against live player actions.
+              Values update on blur. Open Play Game to preview the weapon
+              against live player actions.
             </span>
           </div>
         </section>
@@ -1181,15 +1578,24 @@ function AssetManagerPanel() {
       <div className="asset-manager-grid">
         <a className="asset-card" href="/upload">
           <strong>Upload GLB Map</strong>
-          <span>Use the existing uploader, then paste the delivery GLB URL into the Level Builder.</span>
+          <span>
+            Use the existing uploader, then paste the delivery GLB URL into the
+            Level Builder.
+          </span>
         </a>
         <div className="asset-card">
           <strong>Character Package Roadmap</strong>
-          <span>Next backend step: zip upload, FBX action mapping, and per-level character package selection.</span>
+          <span>
+            Next backend step: zip upload, FBX action mapping, and per-level
+            character package selection.
+          </span>
         </div>
         <div className="asset-card">
           <strong>Runtime Optimization</strong>
-          <span>Current combat path avoids parent rerenders. Next scale step is batching non-hero enemies or impostor LOD for distant mobs.</span>
+          <span>
+            Current combat path avoids parent rerenders. Next scale step is
+            batching non-hero enemies or impostor LOD for distant mobs.
+          </span>
         </div>
       </div>
     </section>
@@ -1198,7 +1604,12 @@ function AssetManagerPanel() {
 
 export function GameWorkbench() {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>("maps");
-  console.log("[antigravity-debug] GameWorkbench mounting/rendering. ActiveTab is:", activeTab);
+  log3DDebug(
+    "game-workbench-render",
+    "GameWorkbench render",
+    { activeTab },
+    { intervalMs: 1000 },
+  );
   const loadSavedLevels = useGameStore((state) => state.loadSavedLevels);
   const loadWeaponLoadouts = useGameStore((state) => state.loadWeaponLoadouts);
   const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
@@ -1223,14 +1634,15 @@ export function GameWorkbench() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadAssets = () => fetch("/api/models", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload) => {
-        if (!cancelled && payload?.success && Array.isArray(payload.data)) {
-          setAssetLibrary(payload.data);
-        }
-      })
-      .catch(() => undefined);
+    const loadAssets = () =>
+      fetch("/api/models", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((payload) => {
+          if (!cancelled && payload?.success && Array.isArray(payload.data)) {
+            setAssetLibrary(payload.data);
+          }
+        })
+        .catch(() => undefined);
     void loadAssets();
     return () => {
       cancelled = true;
@@ -1293,7 +1705,9 @@ export function GameWorkbench() {
   const showStoryTab = !!draft;
 
   return (
-    <div className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}${activeTab === "story" ? " game-container-story" : ""}`}>
+    <div
+      className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}${activeTab === "story" ? " game-container-story" : ""}`}
+    >
       <nav className="game-workbench-nav">
         {[
           ["play", "Play Game"],
@@ -1329,7 +1743,14 @@ export function GameWorkbench() {
           <DialogueSystem />
         </>
       )}
-      {activeTab === "maps" && <MapsPanel onNewMap={() => { void createNewMap(); }} onPlay={openPlay} />}
+      {activeTab === "maps" && (
+        <MapsPanel
+          onNewMap={() => {
+            void createNewMap();
+          }}
+          onPlay={openPlay}
+        />
+      )}
       {activeTab === "editor" && draft && (
         <LevelEditorPanel
           onPlay={openPlay}
@@ -1345,7 +1766,11 @@ export function GameWorkbench() {
           <StoryGraphPanel
             assetLibrary={assetLibrary}
             graph={draft.storyGraph}
-            onChange={(storyGraph) => setDraft((current) => current ? ({ ...current, storyGraph }) : null)}
+            onChange={(storyGraph) =>
+              setDraft((current) =>
+                current ? { ...current, storyGraph } : null,
+              )
+            }
             onSave={saveLevel}
           />
         </div>

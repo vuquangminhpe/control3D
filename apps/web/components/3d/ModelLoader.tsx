@@ -5,11 +5,13 @@ import { useLoader, useThree, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import { OBJLoader, PLYLoader, STLLoader } from "three-stdlib";
 import { isFbxSource, isGltfSource, use3DModel, useFbxModel } from "@/hooks/use3DModel";
+import { log3DDebug } from "@/lib/3d/debug";
 import { cloneMeshMaterial } from "@/lib/3d/materials";
 
 type MeshPointerHandler = (event: ThreeEvent<PointerEvent>) => void;
 type MeshClickHandler = (event: ThreeEvent<MouseEvent>) => void;
 type ModelLoaderProps = {
+  debugLabel?: string;
   fitHeight?: number;
   fitMaxSize?: number;
   groundToY?: number;
@@ -19,6 +21,19 @@ type ModelLoaderProps = {
   onMeshPointerUp?: MeshPointerHandler;
   onSceneReady?: (scene: THREE.Object3D | null) => void;
   src: string;
+  wireframe?: boolean;
+};
+
+type ModelDebugContext = {
+  debugLabel?: string;
+  extension?: string;
+  fitHeight?: number;
+  fitMaxSize?: number;
+  groundToY?: number;
+  loader: string;
+  markAsTerrain?: boolean;
+  phase?: string;
+  src?: string;
   wireframe?: boolean;
 };
 
@@ -47,104 +62,214 @@ function cloneObjectScene(scene: THREE.Object3D, wireframe: boolean, markAsTerra
   return cloned;
 }
 
-export function getRenderableBounds(object: THREE.Object3D) {
+const IGNORED_BOUNDS_NAME_PARTS = [
+  "sky",
+  "dome",
+  "water",
+  "sea",
+  "ocean",
+  "fog",
+  "cloud",
+  "grid",
+  "helper",
+  "collision",
+  "collider",
+  "trigger",
+  "spawn",
+];
+
+function objectOrAncestorNameMatches(object: THREE.Object3D, root: THREE.Object3D) {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    const name = (current.name || "").toLowerCase();
+    if (IGNORED_BOUNDS_NAME_PARTS.some((part) => name.includes(part))) {
+      return true;
+    }
+    if (current === root) break;
+    current = current.parent;
+  }
+  return false;
+}
+
+function finiteBoundsTuple(vector: THREE.Vector3) {
+  return [vector.x, vector.y, vector.z].map((value) => Number(value.toFixed(4)));
+}
+
+function objectTransformSnapshot(object: THREE.Object3D) {
+  object.updateMatrixWorld(true);
+  return {
+    localPosition: finiteBoundsTuple(object.position),
+    localRotation: finiteBoundsTuple(new THREE.Vector3(
+      THREE.MathUtils.radToDeg(object.rotation.x),
+      THREE.MathUtils.radToDeg(object.rotation.y),
+      THREE.MathUtils.radToDeg(object.rotation.z),
+    )),
+    localScale: finiteBoundsTuple(object.scale),
+    worldPosition: finiteBoundsTuple(new THREE.Vector3().setFromMatrixPosition(object.matrixWorld)),
+    worldScale: finiteBoundsTuple(new THREE.Vector3().setFromMatrixScale(object.matrixWorld)),
+  };
+}
+
+function getBoundsDebugKey(object: THREE.Object3D) {
+  object.updateMatrixWorld(true);
+  const scale = new THREE.Vector3().setFromMatrixScale(object.matrixWorld);
+  const position = new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+  return [
+    object.uuid,
+    ...finiteBoundsTuple(scale),
+    ...finiteBoundsTuple(position),
+  ].join(":");
+}
+
+export function getRenderableBounds(object: THREE.Object3D, context?: Partial<ModelDebugContext>) {
   object.updateMatrixWorld(true);
   const bounds = new THREE.Box3();
   const localBounds = new THREE.Box3();
-  
-  const inverseRootMatrix = new THREE.Matrix4();
+
+  const inverseParentMatrix = new THREE.Matrix4();
   try {
-    inverseRootMatrix.copy(object.matrixWorld).invert();
-  } catch (e) {
-    inverseRootMatrix.identity();
+    if (object.parent) {
+      object.parent.updateMatrixWorld(true);
+      inverseParentMatrix.copy(object.parent.matrixWorld).invert();
+    } else {
+      inverseParentMatrix.identity();
+    }
+  } catch {
+    inverseParentMatrix.identity();
   }
 
   const relativeMatrix = new THREE.Matrix4();
+  let totalMeshCount = 0;
+  let includedMeshCount = 0;
+  let ignoredMeshCount = 0;
+  let emptyMeshCount = 0;
+  const children: unknown[] = [];
 
-  console.log("[antigravity-debug] getRenderableBounds root object:", {
-    name: object.name,
-    type: object.type,
-    scale: [object.scale.x, object.scale.y, object.scale.z]
-  });
-  
-  let meshCount = 0;
   object.traverse((child) => {
-    const isMesh = child instanceof THREE.Mesh;
-    const isSkinnedMesh = child instanceof THREE.SkinnedMesh;
-    if (!isMesh && !isSkinnedMesh) return;
-    
-    meshCount++;
+    if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.SkinnedMesh)) return;
+    totalMeshCount += 1;
+    const childTransform = objectTransformSnapshot(child);
+    const childName = child.name || "";
+    const childBase = {
+      index: totalMeshCount,
+      name: childName,
+      type: child.type,
+      uuid: child.uuid,
+      visible: child.visible,
+      ...childTransform,
+    };
+
+    if (!child.visible || objectOrAncestorNameMatches(child, object)) {
+      ignoredMeshCount += 1;
+      children.push({
+        ...childBase,
+        boundsStatus: "ignored",
+        ignoreReason: !child.visible ? "hidden" : "name-filter",
+      });
+      return;
+    }
+
     const geometry = child.geometry;
     if (!geometry) {
-      console.log(`[antigravity-debug]   child #${meshCount}: ${child.name} (${child.type}) has no geometry`);
+      emptyMeshCount += 1;
+      children.push({
+        ...childBase,
+        boundsStatus: "empty",
+        ignoreReason: "missing-geometry",
+      });
       return;
     }
-    
+
     if (!geometry.boundingBox) geometry.computeBoundingBox();
     const bbox = geometry.boundingBox;
-    const isEmpty = !bbox || bbox.isEmpty();
-    
-    console.log(`[antigravity-debug]   child #${meshCount}: ${child.name} (${child.type})`, {
-      geometryBBoxEmpty: isEmpty,
-      geometryBBoxMin: bbox ? [bbox.min.x, bbox.min.y, bbox.min.z] : null,
-      geometryBBoxMax: bbox ? [bbox.max.x, bbox.max.y, bbox.max.z] : null,
-      childScale: [child.scale.x, child.scale.y, child.scale.z],
-      childMatrixWorldScale: new THREE.Vector3().setFromMatrixScale(child.matrixWorld).toArray()
-    });
-
-    if (isEmpty) return;
-
-    // Ignore skyboxes / oceans / water planes / fogs / helper grids & colliders
-    const name = (child.name || "").toLowerCase();
-    if (
-      name.includes("sky") ||
-      name.includes("dome") ||
-      name.includes("water") ||
-      name.includes("sea") ||
-      name.includes("ocean") ||
-      name.includes("fog") ||
-      name.includes("cloud") ||
-      name.includes("grid") ||
-      name.includes("helper") ||
-      name.includes("collision") ||
-      name.includes("collider") ||
-      name.includes("trigger")
-    ) {
-      console.log(`[antigravity-debug]   child #${meshCount}: IGNORED due to name filters`);
+    if (!bbox || bbox.isEmpty()) {
+      emptyMeshCount += 1;
+      children.push({
+        ...childBase,
+        boundsStatus: "empty",
+        ignoreReason: "empty-bounding-box",
+      });
       return;
     }
 
-    relativeMatrix.multiplyMatrices(inverseRootMatrix, child.matrixWorld);
+    relativeMatrix.multiplyMatrices(inverseParentMatrix, child.matrixWorld);
     localBounds.copy(bbox).applyMatrix4(relativeMatrix);
     bounds.union(localBounds);
-    console.log(`[antigravity-debug]   child #${meshCount}: unioned relative bounds. Current bounds:`, {
-      min: [bounds.min.x, bounds.min.y, bounds.min.z],
-      max: [bounds.max.x, bounds.max.y, bounds.max.z]
+    includedMeshCount += 1;
+    children.push({
+      ...childBase,
+      boundsStatus: "included",
+      geometryBounds: {
+        min: finiteBoundsTuple(bbox.min),
+        max: finiteBoundsTuple(bbox.max),
+        size: finiteBoundsTuple(bbox.getSize(new THREE.Vector3())),
+      },
+      renderableBounds: {
+        min: finiteBoundsTuple(localBounds.min),
+        max: finiteBoundsTuple(localBounds.max),
+        size: finiteBoundsTuple(localBounds.getSize(new THREE.Vector3())),
+      },
     });
   });
 
   if (bounds.isEmpty()) {
     const fallbackWorld = new THREE.Box3().setFromObject(object);
-    const fallbackLocal = fallbackWorld.clone().applyMatrix4(inverseRootMatrix);
-    console.log("[antigravity-debug] getRenderableBounds: bounds is empty! Fallback setFromObject (local):", {
-      min: [fallbackLocal.min.x, fallbackLocal.min.y, fallbackLocal.min.z],
-      max: [fallbackLocal.max.x, fallbackLocal.max.y, fallbackLocal.max.z]
-    });
+    const fallbackLocal = fallbackWorld.clone().applyMatrix4(inverseParentMatrix);
+    log3DDebug(
+      `bounds-empty:${getBoundsDebugKey(object)}`,
+      "Renderable bounds fell back to setFromObject",
+      {
+        context,
+        name: object.name,
+        type: object.type,
+        uuid: object.uuid,
+        rootTransform: objectTransformSnapshot(object),
+        totalMeshCount,
+        ignoredMeshCount,
+        emptyMeshCount,
+        min: finiteBoundsTuple(fallbackLocal.min),
+        max: finiteBoundsTuple(fallbackLocal.max),
+        size: finiteBoundsTuple(fallbackLocal.getSize(new THREE.Vector3())),
+        children,
+      },
+      { once: true },
+    );
     return fallbackLocal;
   }
 
-  console.log("[antigravity-debug] getRenderableBounds returning final bounds:", {
-    min: [bounds.min.x, bounds.min.y, bounds.min.z],
-    max: [bounds.max.x, bounds.max.y, bounds.max.z]
-  });
+  log3DDebug(
+    `bounds:${getBoundsDebugKey(object)}`,
+    "Renderable bounds",
+    {
+      context,
+      name: object.name,
+      type: object.type,
+      uuid: object.uuid,
+      rootTransform: objectTransformSnapshot(object),
+      totalMeshCount,
+      includedMeshCount,
+      ignoredMeshCount,
+      emptyMeshCount,
+      min: finiteBoundsTuple(bounds.min),
+      max: finiteBoundsTuple(bounds.max),
+      size: finiteBoundsTuple(bounds.getSize(new THREE.Vector3())),
+      children,
+    },
+    { once: true },
+  );
   return bounds;
 }
 
-function getSceneFitScale(scene: THREE.Object3D, fitHeight?: number, fitMaxSize?: number) {
+function getSceneFitScale(scene: THREE.Object3D, fitHeight?: number, fitMaxSize?: number, context?: Partial<ModelDebugContext>) {
   if (fitHeight === undefined && fitMaxSize === undefined) return 1;
-  const bounds = getRenderableBounds(scene);
+  const bounds = getRenderableBounds(scene, { ...context, phase: "fit-scale" });
   if (bounds.isEmpty()) {
-    console.log("[antigravity-debug] getSceneFitScale: bounds is empty!", { sceneName: scene.name, fitHeight, fitMaxSize });
+    log3DDebug(
+      `fit-empty:${scene.uuid}`,
+      "Scene fit skipped because bounds are empty",
+      { context, sceneName: scene.name, fitHeight, fitMaxSize },
+      { once: true },
+    );
     return 1;
   }
   const size = bounds.getSize(new THREE.Vector3());
@@ -155,29 +280,80 @@ function getSceneFitScale(scene: THREE.Object3D, fitHeight?: number, fitMaxSize?
     const maxSize = Math.max(size.x, size.y, size.z);
     resScale = fitMaxSize !== undefined && maxSize > 0.0001 ? fitMaxSize / maxSize : 1;
   }
-  console.log("[antigravity-debug] getSceneFitScale:", {
-    sceneName: scene.name,
-    fitHeight,
-    fitMaxSize,
-    size: [size.x, size.y, size.z],
-    resScale
-  });
+  log3DDebug(
+    `fit:${scene.uuid}:${fitHeight ?? "auto"}:${fitMaxSize ?? "auto"}`,
+    "Scene fit scale",
+    {
+      context,
+      sceneName: scene.name,
+      sceneUuid: scene.uuid,
+      fitHeight,
+      fitMaxSize,
+      boundsMin: finiteBoundsTuple(bounds.min),
+      boundsMax: finiteBoundsTuple(bounds.max),
+      size: finiteBoundsTuple(size),
+      resScale,
+      fittedHeight: Number((size.y * resScale).toFixed(4)),
+      fittedMaxSize: Number((Math.max(size.x, size.y, size.z) * resScale).toFixed(4)),
+    },
+    { once: true },
+  );
   return resScale;
 }
 
-function getScaledSceneGroundOffset(scene: THREE.Object3D, scale: number, groundToY?: number) {
+function getScaledSceneGroundOffset(scene: THREE.Object3D, scale: number, groundToY?: number, context?: Partial<ModelDebugContext>) {
   if (groundToY === undefined) return 0;
-  const bounds = getRenderableBounds(scene);
+  const bounds = getRenderableBounds(scene, { ...context, phase: "ground-offset" });
   if (bounds.isEmpty()) return 0;
   const offset = groundToY - bounds.min.y * scale;
-  console.log("[antigravity-debug] getScaledSceneGroundOffset:", {
-    sceneName: scene.name,
-    scale,
-    groundToY,
-    minY: bounds.min.y,
-    offset
-  });
+  log3DDebug(
+    `ground:${scene.uuid}:${scale}:${groundToY}`,
+    "Scene ground offset",
+    {
+      context,
+      sceneName: scene.name,
+      sceneUuid: scene.uuid,
+      scale,
+      groundToY,
+      minY: Number(bounds.min.y.toFixed(4)),
+      offset: Number(offset.toFixed(4)),
+      scaledMinY: Number((bounds.min.y * scale).toFixed(4)),
+      scaledMaxY: Number((bounds.max.y * scale).toFixed(4)),
+    },
+    { once: true },
+  );
   return offset;
+}
+
+function logLoadedModelPlacement(
+  group: THREE.Object3D | null,
+  scene: THREE.Object3D,
+  fitScale: number,
+  groundOffset: number,
+  context: ModelDebugContext,
+) {
+  if (!group) return;
+  group.updateMatrixWorld(true);
+  const finalBounds = new THREE.Box3().setFromObject(group);
+  log3DDebug(
+    `placement:${scene.uuid}:${fitScale}:${groundOffset}:${context.debugLabel ?? context.loader}`,
+    "ModelLoader final placement",
+    {
+      context,
+      sceneName: scene.name,
+      sceneUuid: scene.uuid,
+      fitScale,
+      groundOffset,
+      groupTransform: objectTransformSnapshot(group),
+      sceneTransform: objectTransformSnapshot(scene),
+      worldBounds: finalBounds.isEmpty() ? null : {
+        min: finiteBoundsTuple(finalBounds.min),
+        max: finiteBoundsTuple(finalBounds.max),
+        size: finiteBoundsTuple(finalBounds.getSize(new THREE.Vector3())),
+      },
+    },
+    { once: true },
+  );
 }
 
 function getGeometryFitScale(geometry: THREE.BufferGeometry, fitHeight?: number, fitMaxSize?: number) {
@@ -233,6 +409,7 @@ function FallbackAsset({
 }
 
 function LoadedObjModel({
+  debugLabel,
   fitHeight,
   fitMaxSize,
   groundToY,
@@ -246,22 +423,34 @@ function LoadedObjModel({
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const source = useLoader(OBJLoader, src);
+  const debugContext = useMemo<ModelDebugContext>(() => ({
+    debugLabel,
+    extension: "obj",
+    fitHeight,
+    fitMaxSize,
+    groundToY,
+    loader: "obj",
+    markAsTerrain,
+    src,
+    wireframe,
+  }), [debugLabel, fitHeight, fitMaxSize, groundToY, markAsTerrain, src, wireframe]);
   const scene = useMemo(
     () => cloneObjectScene(source, wireframe, markAsTerrain),
     [markAsTerrain, source, wireframe],
   );
   const fitScale = useMemo(
-    () => getSceneFitScale(scene, fitHeight, fitMaxSize),
-    [fitHeight, fitMaxSize, scene],
+    () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
+    [debugContext, fitHeight, fitMaxSize, scene],
   );
   const groundOffset = useMemo(
-    () => getScaledSceneGroundOffset(scene, fitScale, groundToY),
-    [fitScale, groundToY, scene],
+    () => getScaledSceneGroundOffset(scene, fitScale, groundToY, debugContext),
+    [debugContext, fitScale, groundToY, scene],
   );
 
   useEffect(() => {
+    logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
     onSceneReady?.(groupRef.current);
-  }, [groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>
@@ -276,6 +465,7 @@ function LoadedObjModel({
 }
 
 function GeometryModel({
+  debugLabel,
   fitHeight,
   fitMaxSize,
   geometry,
@@ -285,9 +475,20 @@ function GeometryModel({
   onMeshPointerDown,
   onMeshPointerUp,
   onSceneReady,
+  src,
   wireframe = false,
-}: Omit<ModelLoaderProps, "src"> & { geometry: THREE.BufferGeometry }) {
+}: ModelLoaderProps & { geometry: THREE.BufferGeometry }) {
   const meshRef = useRef<THREE.Mesh | null>(null);
+  const debugContext = useMemo<ModelDebugContext>(() => ({
+    debugLabel,
+    fitHeight,
+    fitMaxSize,
+    groundToY,
+    loader: "geometry",
+    markAsTerrain,
+    src,
+    wireframe,
+  }), [debugLabel, fitHeight, fitMaxSize, groundToY, markAsTerrain, src, wireframe]);
   const clonedGeometry = useMemo(() => {
     const cloned = geometry.clone();
     if (!cloned.attributes.normal) cloned.computeVertexNormals();
@@ -303,8 +504,27 @@ function GeometryModel({
   );
 
   useEffect(() => {
+    if (meshRef.current) {
+      const worldBounds = new THREE.Box3().setFromObject(meshRef.current);
+      log3DDebug(
+        `geometry-placement:${meshRef.current.uuid}:${fitScale}:${groundOffset}`,
+        "GeometryModel final placement",
+        {
+          context: debugContext,
+          fitScale,
+          groundOffset,
+          meshTransform: objectTransformSnapshot(meshRef.current),
+          worldBounds: worldBounds.isEmpty() ? null : {
+            min: finiteBoundsTuple(worldBounds.min),
+            max: finiteBoundsTuple(worldBounds.max),
+            size: finiteBoundsTuple(worldBounds.getSize(new THREE.Vector3())),
+          },
+        },
+        { once: true },
+      );
+    }
     onSceneReady?.(meshRef.current);
-  }, [groundOffset, onSceneReady]);
+  }, [debugContext, fitScale, groundOffset, onSceneReady]);
 
   return (
     <mesh
@@ -335,6 +555,7 @@ function LoadedPlyModel(props: ModelLoaderProps) {
 }
 
 function LoadedModel({
+  debugLabel,
   fitHeight,
   fitMaxSize,
   groundToY,
@@ -348,6 +569,17 @@ function LoadedModel({
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const scene = use3DModel(src, { wireframe });
+  const debugContext = useMemo<ModelDebugContext>(() => ({
+    debugLabel,
+    extension: "glb/gltf",
+    fitHeight,
+    fitMaxSize,
+    groundToY,
+    loader: "gltf",
+    markAsTerrain,
+    src,
+    wireframe,
+  }), [debugLabel, fitHeight, fitMaxSize, groundToY, markAsTerrain, src, wireframe]);
   useEffect(() => {
     if (!markAsTerrain) return;
     scene.traverse((child) => {
@@ -355,17 +587,18 @@ function LoadedModel({
     });
   }, [markAsTerrain, scene]);
   const fitScale = useMemo(
-    () => getSceneFitScale(scene, fitHeight, fitMaxSize),
-    [fitHeight, fitMaxSize, scene],
+    () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
+    [debugContext, fitHeight, fitMaxSize, scene],
   );
   const groundOffset = useMemo(
-    () => getScaledSceneGroundOffset(scene, fitScale, groundToY),
-    [fitScale, groundToY, scene],
+    () => getScaledSceneGroundOffset(scene, fitScale, groundToY, debugContext),
+    [debugContext, fitScale, groundToY, scene],
   );
 
   useEffect(() => {
+    logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
     onSceneReady?.(groupRef.current);
-  }, [groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>
@@ -380,6 +613,7 @@ function LoadedModel({
 }
 
 function LoadedFbxModel({
+  debugLabel,
   fitHeight,
   fitMaxSize,
   groundToY,
@@ -393,6 +627,17 @@ function LoadedFbxModel({
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const scene = useFbxModel(src, { wireframe });
+  const debugContext = useMemo<ModelDebugContext>(() => ({
+    debugLabel,
+    extension: "fbx",
+    fitHeight,
+    fitMaxSize,
+    groundToY,
+    loader: "fbx",
+    markAsTerrain,
+    src,
+    wireframe,
+  }), [debugLabel, fitHeight, fitMaxSize, groundToY, markAsTerrain, src, wireframe]);
   useEffect(() => {
     if (!markAsTerrain) return;
     scene.traverse((child) => {
@@ -400,17 +645,18 @@ function LoadedFbxModel({
     });
   }, [markAsTerrain, scene]);
   const fitScale = useMemo(
-    () => getSceneFitScale(scene, fitHeight, fitMaxSize),
-    [fitHeight, fitMaxSize, scene],
+    () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
+    [debugContext, fitHeight, fitMaxSize, scene],
   );
   const groundOffset = useMemo(
-    () => getScaledSceneGroundOffset(scene, fitScale, groundToY),
-    [fitScale, groundToY, scene],
+    () => getScaledSceneGroundOffset(scene, fitScale, groundToY, debugContext),
+    [debugContext, fitScale, groundToY, scene],
   );
 
   useEffect(() => {
+    logLoadedModelPlacement(groupRef.current, scene, fitScale, groundOffset, debugContext);
     onSceneReady?.(groupRef.current);
-  }, [groundOffset, onSceneReady, scene]);
+  }, [debugContext, fitScale, groundOffset, onSceneReady, scene]);
 
   return (
     <group ref={groupRef} position={[0, groundOffset, 0]} scale={fitScale}>

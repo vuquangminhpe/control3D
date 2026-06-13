@@ -147,7 +147,12 @@ function PlacedObjectLayer() {
           ]}
           scale={object.scale}
         >
-          <ModelLoader fitMaxSize={placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)} groundToY={0} src={object.fileUrl} />
+          <ModelLoader
+            debugLabel={`runtime-placed-object:${object.name}`}
+            fitMaxSize={placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)}
+            groundToY={0}
+            src={object.fileUrl}
+          />
         </group>
       ))}
     </>

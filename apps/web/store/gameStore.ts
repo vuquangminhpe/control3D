@@ -773,7 +773,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   
   floatingDamages: [],
 
-  setMapScaleRatio: (ratio) => set({ mapScaleRatio: ratio }),
+  setMapScaleRatio: (ratio) => set((state) => (
+    Math.abs(state.mapScaleRatio - ratio) < 0.001 ? state : { mapScaleRatio: ratio }
+  )),
 
   startGame: () => {
     set((state) => ({

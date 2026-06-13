@@ -6,6 +6,7 @@ import { RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier"
 import * as THREE from "three";
 import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
 import { ModelLoader } from "@/components/3d/ModelLoader";
+import { log3DDebug } from "@/lib/3d/debug";
 
 const BOW_MIN_SPEED = 18;
 const BOW_MAX_SPEED = 46;
@@ -18,16 +19,16 @@ function CustomPlayerVisual({ src }: { src: string }) {
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const fitHeight = 1.85 * mapScaleRatio;
   const posY = -1.5 * mapScaleRatio;
-  console.log("[antigravity-debug] CustomPlayerVisual rendering:", {
-    src,
-    mapScaleRatio,
-    fitHeight,
-    posY
-  });
+  log3DDebug(
+    `player-visual:${src}:${fitHeight}:${posY}`,
+    "Player visual fit",
+    { src, mapScaleRatio, fitHeight, posY },
+    { once: true },
+  );
   return (
     <group position={[0, posY, 0]}>
       <Suspense fallback={null}>
-        <ModelLoader fitHeight={fitHeight} groundToY={0} src={src} />
+        <ModelLoader debugLabel="runtime-player-visual" fitHeight={fitHeight} groundToY={0} src={src} />
       </Suspense>
     </group>
   );
@@ -629,13 +630,18 @@ export function Player() {
     }
   });
 
-  console.log("[antigravity-debug] Player rendering:", {
-    mapScaleRatio,
-    initialPosition: initialPlayerPositionRef.current,
-    playerCharacter: playerCharacter?.fileUrl,
-    capsuleArgs: [0.7 * mapScaleRatio, 0.4 * mapScaleRatio],
-    capsulePos: [0, 1.1 * mapScaleRatio, 0]
-  });
+  log3DDebug(
+    `player-render:${playerCharacter?.fileUrl ?? "none"}`,
+    "Player render scale",
+    {
+      mapScaleRatio,
+      initialPosition: initialPlayerPositionRef.current,
+      playerCharacter: playerCharacter?.fileUrl,
+      capsuleArgs: [0.7 * mapScaleRatio, 0.4 * mapScaleRatio],
+      capsulePos: [0, 1.1 * mapScaleRatio, 0],
+    },
+    { intervalMs: 1000 },
+  );
 
   return (
     <RigidBody
