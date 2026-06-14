@@ -45,6 +45,7 @@ export type PlacedObject = {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  isMap?: boolean;
 };
 
 export type StoryVariableType = "string" | "number" | "boolean" | "character";
@@ -564,6 +565,12 @@ function runGraphLogic(
 ): DialogNode | null {
   let currentNode = graph.nodes.find((n) => n.id === nodeId);
   if (!currentNode) return null;
+
+  // Inject active gameplay variables dynamically
+  variables.player_hp = get().playerHp;
+  variables.player_score = get().score;
+  variables.player_weapon = get().selectedWeapon;
+  variables.enemy_count = get().enemies.filter((e) => !e.isDead).length;
 
   let speakerName = "";
   let speakerSub = "";

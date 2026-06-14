@@ -640,7 +640,7 @@ function LoadedModel({
   wireframe = false,
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
-  const scene = use3DModel(src, { wireframe });
+  const scene = use3DModel(src, { wireframe, cloneMaterials: !markAsTerrain });
   const debugContext = useMemo<ModelDebugContext>(() => ({
     debugLabel,
     extension: "glb/gltf",
@@ -658,6 +658,23 @@ function LoadedModel({
       if (child instanceof THREE.Mesh) child.userData.isTerrainSurface = true;
     });
   }, [markAsTerrain, scene]);
+
+  useEffect(() => {
+    return () => {
+      scene.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        }
+      });
+    };
+  }, [scene]);
   const fitScale = useMemo(
     () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
     [debugContext, fitHeight, fitMaxSize, scene],
@@ -701,7 +718,7 @@ function LoadedFbxModel({
   wireframe = false,
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
-  const scene = useFbxModel(src, { wireframe });
+  const scene = useFbxModel(src, { wireframe, cloneMaterials: !markAsTerrain });
   const debugContext = useMemo<ModelDebugContext>(() => ({
     debugLabel,
     extension: "fbx",
@@ -719,6 +736,23 @@ function LoadedFbxModel({
       if (child instanceof THREE.Mesh) child.userData.isTerrainSurface = true;
     });
   }, [markAsTerrain, scene]);
+
+  useEffect(() => {
+    return () => {
+      scene.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        }
+      });
+    };
+  }, [scene]);
   const fitScale = useMemo(
     () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
     [debugContext, fitHeight, fitMaxSize, scene],

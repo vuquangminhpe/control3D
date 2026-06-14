@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from "react";
-import { Canvas, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
 import {
   Grid,
   Html,
@@ -46,7 +46,7 @@ import {
 } from "@/store/gameStore";
 
 type WorkbenchTab = "play" | "maps" | "editor" | "story";
-type PlacementTool = "player" | "object";
+type PlacementTool = "player" | "object" | "enemy_low" | "enemy_fantasy" | "npc";
 type EditableLevelDraft = ReturnType<typeof buildEditableLevel>;
 type AssetLibraryItem = {
   id: string;
@@ -66,8 +66,9 @@ type CharacterActionLink = {
   fileUrl: string;
   sourceFormat: string;
   enabled: boolean;
-  trigger: "none" | "attack" | "talk" | "move" | "custom" | "crouch" | "jump";
+  trigger: "none" | "attack" | "talk" | "move" | "custom" | "crouch" | "jump" | "idle";
   keyBinding: string | null;
+  durationMs?: number | null;
 };
 
 const DEFAULT_MAP_URL = "";
@@ -122,6 +123,41 @@ function parseVector(value: string): [number, number, number] | null {
   return [parts[0], parts[1], parts[2]];
 }
 
+function isEnvironmentAsset(name: string, fileUrl: string) {
+  const lowerName = name.toLowerCase();
+  const lowerUrl = fileUrl.toLowerCase();
+  return (
+    lowerName.includes("map") ||
+    lowerName.includes("terrain") ||
+    lowerName.includes("env") ||
+    lowerName.includes("ground") ||
+    lowerName.includes("scene") ||
+    lowerName.includes("building") ||
+    lowerName.includes("dungeon") ||
+    lowerName.includes("sector") ||
+    lowerName.includes("level") ||
+    lowerName.includes("room") ||
+    lowerName.includes("floor") ||
+    lowerName.includes("cliff") ||
+    lowerName.includes("rock") ||
+    lowerName.includes("road") ||
+    lowerUrl.includes("map") ||
+    lowerUrl.includes("terrain") ||
+    lowerUrl.includes("environment")
+  );
+}
+
+function SceneRefGetter({ sceneRef }: { sceneRef: React.MutableRefObject<THREE.Scene | null> }) {
+  const { scene } = useThree();
+  useEffect(() => {
+    sceneRef.current = scene;
+    return () => {
+      sceneRef.current = null;
+    };
+  }, [scene, sceneRef]);
+  return null;
+}
+
 function getSmartActionBinding(name: string): { trigger: CharacterActionLink["trigger"]; keyBinding: string | null } | null {
   const lowercase = name.toLowerCase();
 
@@ -167,14 +203,23 @@ function getSmartActionBinding(name: string): { trigger: CharacterActionLink["tr
     return { trigger: "attack", keyBinding: key };
   }
 
-  // Move and Idle matches
+  // Idle matches
+  if (
+    lowercase.includes("idle") ||
+    lowercase.includes("stand") ||
+    lowercase.includes("breath") ||
+    lowercase.includes("rest")
+  ) {
+    return { trigger: "idle", keyBinding: null };
+  }
+
+  // Move matches
   if (
     lowercase.includes("walk") ||
     lowercase.includes("run") ||
     lowercase.includes("sprint") ||
     lowercase.includes("move") ||
-    lowercase.includes("go") ||
-    lowercase.includes("idle")
+    lowercase.includes("go")
   ) {
     return { trigger: "move", keyBinding: "W+A+S+D" };
   }
@@ -874,6 +919,132 @@ function PlayerMarker({
   );
 }
 
+function EnemyMarker({
+  position,
+  type,
+  onCommit,
+  onSelect,
+  selected,
+}: {
+  position: [number, number, number];
+  type: "zombie_low" | "zombie_fantasy";
+  onCommit: (position: [number, number, number]) => void;
+  onSelect: () => void;
+  selected: boolean;
+}) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const commitTransform = () => {
+    const group = groupRef.current;
+    if (!group) return;
+    onCommit([group.position.x, group.position.y, group.position.z]);
+  };
+
+  const modelSrc = type === "zombie_fantasy" 
+    ? "/models/zombie_fantasy_animated.glb" 
+    : "/models/low_poly_zombie_game_animation.glb";
+
+  return (
+    <>
+      <group
+        ref={groupRef}
+        position={position}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        <Suspense fallback={null}>
+          <ModelLoader
+            debugLabel={`builder-enemy-${type}`}
+            fitHeight={1.8}
+            groundToY={0}
+            src={modelSrc}
+          />
+        </Suspense>
+        {selected ? (
+          <mesh>
+            <boxGeometry args={[0.8, 1.8, 0.8]} />
+            <meshBasicMaterial
+              color="#ff3b3b"
+              wireframe
+              transparent
+              opacity={0.75}
+            />
+          </mesh>
+        ) : null}
+        <MarkerLabel>{type === "zombie_fantasy" ? "ENEMY FANTASY" : "ENEMY LOW"}</MarkerLabel>
+      </group>
+      {selected && groupRef.current ? (
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          onMouseUp={commitTransform}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function NpcMarker({
+  position,
+  onCommit,
+  onSelect,
+  selected,
+}: {
+  position: [number, number, number];
+  onCommit: (position: [number, number, number]) => void;
+  onSelect: () => void;
+  selected: boolean;
+}) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const commitTransform = () => {
+    const group = groupRef.current;
+    if (!group) return;
+    onCommit([group.position.x, group.position.y, group.position.z]);
+  };
+
+  return (
+    <>
+      <group
+        ref={groupRef}
+        position={position}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        <Suspense fallback={null}>
+          <ModelLoader
+            debugLabel="builder-npc"
+            fitHeight={1.9}
+            groundToY={0}
+            src="/models/robot_tuan_tra_NPC.glb"
+          />
+        </Suspense>
+        {selected ? (
+          <mesh>
+            <boxGeometry args={[0.8, 1.9, 0.8]} />
+            <meshBasicMaterial
+              color="#3b82f6"
+              wireframe
+              transparent
+              opacity={0.75}
+            />
+          </mesh>
+        ) : null}
+        <MarkerLabel>NPC</MarkerLabel>
+      </group>
+      {selected && groupRef.current ? (
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          onMouseUp={commitTransform}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function PlacedObjectMarker({
   fitMaxSize,
   object,
@@ -903,7 +1074,10 @@ function PlacedObjectMarker({
     });
   };
 
-  const adjustedSize = fitMaxSize * getIntelligentScaleMultiplier(object.name);
+  const isEnv = isEnvironmentAsset(object.name, object.fileUrl);
+  const adjustedSize = isEnv
+    ? EDITOR_MAP_MAX_SIZE
+    : fitMaxSize * getIntelligentScaleMultiplier(object.name);
 
   return (
     <>
@@ -929,6 +1103,7 @@ function PlacedObjectMarker({
             fitMaxSize={adjustedSize}
             groundToY={0}
             src={object.fileUrl}
+            markAsTerrain={isEnv}
           />
         </Suspense>
         {selected ? (
@@ -983,12 +1158,13 @@ function LevelBuilderViewport({
     },
     { intervalMs: 1000 },
   );
-  const [selectedCoreId, setSelectedCoreId] = useState<"player" | "">("");
+  const [selectedCoreId, setSelectedCoreId] = useState<string>("");
   const [selectedObjectId, setSelectedObjectId] = useState<string>("");
   const [mapRelativeScale, setMapRelativeScale] = useState<MapRelativeScale>(
     DEFAULT_MAP_RELATIVE_SCALE,
   );
   const terrainObjectRef = useRef<THREE.Object3D | null>(null);
+  const editorSceneRef = useRef<THREE.Scene | null>(null);
   const terrainRaycasterRef = useRef(new THREE.Raycaster());
   const lastTerrainSnapKeyRef = useRef("");
   const lastMapSeedUrlRef = useRef("");
@@ -1116,20 +1292,26 @@ function LevelBuilderViewport({
   }, [assetLibrary, selectedAssetId, setSelectedAssetId]);
 
   const getTerrainY = (x: number, z: number, fallbackY = 0) => {
+    const scene = editorSceneRef.current;
     const terrain = terrainObjectRef.current;
-    if (!terrain) return fallbackY;
-    terrain.updateMatrixWorld(true);
-    const bounds = getObjectBounds(terrain);
-    const rayStartY = bounds
-      ? bounds.max.y + Math.max(bounds.getSize(new THREE.Vector3()).y, 20)
-      : 1000;
+    if (!scene && !terrain) return fallbackY;
+    
+    let rayStartY = 1000;
+    if (terrain) {
+      terrain.updateMatrixWorld(true);
+      const bounds = getObjectBounds(terrain);
+      if (bounds) {
+        rayStartY = bounds.max.y + Math.max(bounds.getSize(new THREE.Vector3()).y, 20);
+      }
+    }
+    
     const raycaster = terrainRaycasterRef.current;
     raycaster.set(
       new THREE.Vector3(x, rayStartY, z),
       new THREE.Vector3(0, -1, 0),
     );
     const hit = pickTerrainSurfaceHit(
-      raycaster.intersectObject(terrain, true),
+      raycaster.intersectObject(scene || terrain!, true),
       fallbackY,
     );
     log3DDebug(
@@ -1218,6 +1400,32 @@ function LevelBuilderViewport({
           terrainY + PLAYER_SPAWN_OFFSET * currentMapScale,
           z,
         ]),
+      }));
+      return;
+    }
+    if (placementTool === "npc") {
+      setDraft((current) => ({
+        ...current,
+        robotSpawn: formatVector([
+          x,
+          terrainY,
+          z,
+        ]),
+      }));
+      return;
+    }
+    if (placementTool === "enemy_low" || placementTool === "enemy_fantasy") {
+      const type = placementTool === "enemy_low" ? "zombie_low" : "zombie_fantasy";
+      setDraft((current) => ({
+        ...current,
+        zombieSpawns: [
+          ...current.zombieSpawns,
+          {
+            id: `enemy-${Math.random().toString(36).substring(2, 9)}`,
+            type,
+            position: [x, terrainY, z],
+          },
+        ],
       }));
       return;
     }
@@ -1354,6 +1562,9 @@ function LevelBuilderViewport({
           >
             <option value="player">Player</option>
             <option value="object">Uploaded Model</option>
+            <option value="enemy_low">Enemy (Low Poly)</option>
+            <option value="enemy_fantasy">Enemy (Fantasy)</option>
+            <option value="npc">NPC</option>
           </select>
         </label>
         {placementTool === "object" ? (
@@ -1395,11 +1606,13 @@ function LevelBuilderViewport({
         <div className="builder-placed-panel">
           <header>
             <strong>Placed objects</strong>
-            <span>{draft.placedObjects.length}</span>
+            <span>{draft.placedObjects.filter((obj) => !obj.isMap).length}</span>
           </header>
-          {draft.placedObjects.length ? (
+          {draft.placedObjects.filter((obj) => !obj.isMap).length ? (
             <div className="builder-object-list">
-              {draft.placedObjects.map((object, index) => (
+              {draft.placedObjects
+                .filter((obj) => !obj.isMap)
+                .map((object, index) => (
                 <article
                   className={`builder-object-card${selectedObjectId === object.id ? " active" : ""}`}
                   key={`${object.id}-${index}`}
@@ -1444,6 +1657,75 @@ function LevelBuilderViewport({
             <p className="builder-empty-note">No placed models yet.</p>
           )}
         </div>
+
+        <div className="builder-placed-panel">
+          <header>
+            <strong>Placed Enemies & NPCs</strong>
+            <span>{draft.zombieSpawns.length + (draft.robotSpawn ? 1 : 0)}</span>
+          </header>
+          {draft.robotSpawn || draft.zombieSpawns.length ? (
+            <div className="builder-object-list">
+              {draft.robotSpawn && (
+                <article
+                  className={`builder-object-card${selectedCoreId === "robot" ? " active" : ""}`}
+                >
+                  <button
+                    className="builder-object-pick"
+                    onClick={() => {
+                      setSelectedCoreId("robot");
+                      setSelectedObjectId("");
+                    }}
+                    type="button"
+                  >
+                    <span>NPC Dialogue Robot</span>
+                    <small>{draft.robotSpawn}</small>
+                  </button>
+                  <div className="builder-object-controls">
+                    <button
+                      className="danger"
+                      onClick={() => setDraft((current) => ({ ...current, robotSpawn: "" }))}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              )}
+              {draft.zombieSpawns.map((spawn, index) => (
+                <article
+                  className={`builder-object-card${selectedCoreId === `enemy-${spawn.id}` ? " active" : ""}`}
+                  key={`${spawn.id}-${index}`}
+                >
+                  <button
+                    className="builder-object-pick"
+                    onClick={() => {
+                      setSelectedCoreId(`enemy-${spawn.id}`);
+                      setSelectedObjectId("");
+                    }}
+                    type="button"
+                  >
+                    <span>{spawn.type === "zombie_fantasy" ? "Enemy (Fantasy)" : "Enemy (Low Poly)"}</span>
+                    <small>{formatVector(spawn.position)}</small>
+                  </button>
+                  <div className="builder-object-controls">
+                    <button
+                      className="danger"
+                      onClick={() => setDraft((current) => ({
+                        ...current,
+                        zombieSpawns: current.zombieSpawns.filter((s) => s.id !== spawn.id)
+                      }))}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="builder-empty-note">No enemies/NPCs placed yet.</p>
+          )}
+        </div>
       </aside>
 
       <div className="builder-viewport">
@@ -1460,6 +1742,7 @@ function LevelBuilderViewport({
           camera={{ position: [16, 14, 20], fov: 48 }}
           shadows="percentage"
         >
+          <SceneRefGetter sceneRef={editorSceneRef} />
           <color attach="background" args={["#070b16"]} />
           <ambientLight intensity={0.65} />
           <directionalLight castShadow intensity={1.8} position={[8, 16, 10]} />
@@ -1474,6 +1757,7 @@ function LevelBuilderViewport({
             {draft.mapModelUrl ? (
               <group position={[0, 0, 0]} scale={[1, 1, 1]}>
                 <ModelLoader
+                  key={draft.mapModelUrl}
                   debugLabel="builder-terrain"
                   fitMaxSize={EDITOR_MAP_MAX_SIZE}
                   groundToY={0}
@@ -1588,6 +1872,44 @@ function LevelBuilderViewport({
                 setSelectedObjectId(object.id);
               }}
               selected={selectedObjectId === object.id}
+            />
+          ))}
+
+          {draft.robotSpawn ? (
+            <NpcMarker
+              position={parseVector(draft.robotSpawn) || [0, 0, 0]}
+              onCommit={(pos) =>
+                setDraft((current) => ({
+                  ...current,
+                  robotSpawn: formatVector(pos),
+                }))
+              }
+              onSelect={() => {
+                setSelectedCoreId("robot");
+                setSelectedObjectId("");
+              }}
+              selected={selectedCoreId === "robot"}
+            />
+          ) : null}
+
+          {draft.zombieSpawns.map((spawn, index) => (
+            <EnemyMarker
+              key={spawn.id || index}
+              position={spawn.position}
+              type={spawn.type}
+              onCommit={(pos) =>
+                setDraft((current) => ({
+                  ...current,
+                  zombieSpawns: current.zombieSpawns.map((s) =>
+                    s.id === spawn.id ? { ...s, position: pos } : s,
+                  ),
+                }))
+              }
+              onSelect={() => {
+                setSelectedCoreId(`enemy-${spawn.id}`);
+                setSelectedObjectId("");
+              }}
+              selected={selectedCoreId === `enemy-${spawn.id}`}
             />
           ))}
           <OrbitControls makeDefault />
@@ -1821,18 +2143,20 @@ function LevelEditorPanel({
                 }
               />
             </label>
-            <label>
-              Active map
+            <label style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "4px" }}>
+              Primary Map
               <select
+                style={{ padding: "6px", width: "100%" }}
                 value={draft.mapModelUrl}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const selectUrl = event.target.value;
+                  if (!selectUrl) return;
                   setDraft((current) => ({
                     ...current,
-                    mapModelUrl: event.target.value,
-                  }))
-                }
+                    mapModelUrl: selectUrl,
+                  }));
+                }}
               >
-                <option value="">Choose map</option>
                 {mapAssets.map((asset) => (
                   <option key={asset.id} value={asset.fileUrl}>
                     {asset.name}
@@ -1840,6 +2164,94 @@ function LevelEditorPanel({
                 ))}
               </select>
             </label>
+            <div className="editor-active-maps-container" style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <label style={{ fontWeight: "bold" }}>Secondary maps</label>
+              <div className="editor-active-maps-list" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {draft.placedObjects
+                  .filter((object) => object.isMap || isEnvironmentAsset(object.name, object.fileUrl))
+                  .map((object, index) => {
+                    return (
+                      <div
+                        key={`${object.id}-${index}`}
+                        className="active-map-item"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "6px 10px",
+                          background: "rgba(255, 255, 255, 0.05)",
+                          border: "1px solid rgba(255, 255, 255, 0.1)",
+                          borderRadius: "6px",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", maxWidth: "180px" }}>
+                          {object.name || object.fileUrl.split("/").pop()}
+                        </span>
+                        <button
+                          type="button"
+                          style={{
+                            background: "#ef4444",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: "4px",
+                            padding: "2px 8px",
+                            cursor: "pointer",
+                            fontSize: "0.75rem",
+                          }}
+                          onClick={() => {
+                            setDraft((current) => ({
+                              ...current,
+                              placedObjects: current.placedObjects.filter(
+                                (obj) => obj.id !== object.id,
+                              ),
+                            }));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+              </div>
+              <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                <select
+                  style={{ flex: 1, padding: "6px" }}
+                  value=""
+                  onChange={(event) => {
+                    const addUrl = event.target.value;
+                    if (!addUrl) return;
+                    const asset = mapAssets.find((a) => a.fileUrl === addUrl);
+                    if (!asset) return;
+
+                    const id = createPlacedObjectId();
+                    setDraft((current) => ({
+                      ...current,
+                      placedObjects: [
+                        ...current.placedObjects,
+                        {
+                          id,
+                          modelId: asset.id,
+                          name: asset.name,
+                          fileUrl: asset.fileUrl,
+                          position: [0, 0, 0],
+                          rotation: [0, 0, 0],
+                          scale: [1, 1, 1],
+                          isMap: true,
+                        },
+                      ],
+                    }));
+                  }}
+                >
+                  <option value="">Add secondary map...</option>
+                  {mapAssets.map((asset) => (
+                    <option key={asset.id} value={asset.fileUrl}>
+                      {asset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <label className="map-upload-field">
               Upload map
               <input
@@ -2241,6 +2653,8 @@ export function GameWorkbench() {
   };
 
   useEffect(() => {
+    // Disabled keyboard animation override to let Player.tsx handle animations
+    return;
     if (activeTab !== "play" || !selectedPlayerActions.length) return;
 
     const keysPressed = new Set<string>();

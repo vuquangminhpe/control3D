@@ -134,5 +134,6 @@ export const createLevelSchema = z.object({
     position: vector3Schema,
     rotation: vector3Schema,
     scale: vector3Schema,
+    isMap: z.boolean().optional(),
   })).default([]),
 });

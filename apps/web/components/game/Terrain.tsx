@@ -27,7 +27,7 @@ function getGameplayMapScaleRatio(scene: THREE.Object3D) {
   return span > 0.0001 ? span / GAME_MAP_MAX_SIZE : 1;
 }
 
-function TerrainModel({ mapModelUrl, onReady }: TerrainProps & { mapModelUrl: string }) {
+function TerrainModel({ mapModelUrl, onReady, isPrimary = true }: TerrainProps & { mapModelUrl: string; isPrimary?: boolean }) {
   const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
   const { scene } = useGLTF(mapModelUrl, dracoPath);
 
@@ -104,19 +104,21 @@ function TerrainModel({ mapModelUrl, onReady }: TerrainProps & { mapModelUrl: st
   const setMapScaleRatio = useGameStore((state) => state.setMapScaleRatio);
 
   useEffect(() => {
-    onReady?.(optimizedScene);
-    const gameplayScaleRatio = getGameplayMapScaleRatio(optimizedScene);
-    log3DDebug(
-      `terrain-ready:${mapModelUrl}`,
-      "Terrain ready",
-      {
-        gameplayScaleRatio: Number(gameplayScaleRatio.toFixed(4)),
-        rootScale: [optimizedScene.scale.x, optimizedScene.scale.y, optimizedScene.scale.z].map((value) => Number(value.toFixed(4))),
-      },
-      { once: true },
-    );
-    setMapScaleRatio(gameplayScaleRatio);
-  }, [mapModelUrl, onReady, optimizedScene, setMapScaleRatio]);
+    if (isPrimary) {
+      onReady?.(optimizedScene);
+      const gameplayScaleRatio = getGameplayMapScaleRatio(optimizedScene);
+      log3DDebug(
+        `terrain-ready:${mapModelUrl}`,
+        "Terrain ready",
+        {
+          gameplayScaleRatio: Number(gameplayScaleRatio.toFixed(4)),
+          rootScale: [optimizedScene.scale.x, optimizedScene.scale.y, optimizedScene.scale.z].map((value) => Number(value.toFixed(4))),
+        },
+        { once: true },
+      );
+      setMapScaleRatio(gameplayScaleRatio);
+    }
+  }, [mapModelUrl, onReady, optimizedScene, setMapScaleRatio, isPrimary]);
 
   return (
     <RigidBody type="fixed" colliders="trimesh" position={[0, 0, 0]} rotation={[0, 0, 0]}>
@@ -128,5 +130,5 @@ function TerrainModel({ mapModelUrl, onReady }: TerrainProps & { mapModelUrl: st
 export function Terrain({ onReady }: TerrainProps) {
   const mapModelUrl = useGameStore((state) => state.activeLevel.mapModelUrl);
   if (!mapModelUrl) return null;
-  return <TerrainModel mapModelUrl={mapModelUrl} onReady={onReady} />;
+  return <TerrainModel mapModelUrl={mapModelUrl} onReady={onReady} isPrimary={true} />;
 }

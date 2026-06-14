@@ -118,7 +118,8 @@ export type CharacterActionTrigger =
   | "move"
   | "custom"
   | "crouch"
-  | "jump";
+  | "jump"
+  | "idle";
 
 export type CharacterActionLinkRecord = {
   id: string;
@@ -219,6 +220,7 @@ export type LevelRecord = {
     position: [number, number, number];
     rotation: [number, number, number];
     scale: [number, number, number];
+    isMap?: boolean;
   }>;
   createdAt: string;
   updatedAt: string;

@@ -27,7 +27,7 @@ export function preload3DModel(src: string) {
   }
 }
 
-function cloneScene(scene: THREE.Object3D, wireframe: boolean) {
+function cloneScene(scene: THREE.Object3D, wireframe: boolean, cloneMaterials = true) {
   const cloned = SkeletonUtils.clone(scene);
   cloned.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) {
@@ -37,14 +37,16 @@ function cloneScene(scene: THREE.Object3D, wireframe: boolean) {
     child.castShadow = true;
     child.receiveShadow = true;
 
-    if (Array.isArray(child.material)) {
-      child.material = child.material.map((material) =>
-        cloneMeshMaterial(material, wireframe),
-      );
-      return;
-    }
+    if (cloneMaterials) {
+      if (Array.isArray(child.material)) {
+        child.material = child.material.map((material) =>
+          cloneMeshMaterial(material, wireframe),
+        );
+        return;
+      }
 
-    child.material = cloneMeshMaterial(child.material, wireframe);
+      child.material = cloneMeshMaterial(child.material, wireframe);
+    }
   });
 
   return cloned;
@@ -52,7 +54,7 @@ function cloneScene(scene: THREE.Object3D, wireframe: boolean) {
 
 export function use3DModel(
   src: string,
-  options?: { wireframe?: boolean },
+  options?: { wireframe?: boolean; cloneMaterials?: boolean },
 ) {
   const dracoPath = "https://www.gstatic.com/draco/v1/decoders/";
   const gltf = useGLTF(src, dracoPath);
@@ -62,14 +64,14 @@ export function use3DModel(
   }, [src]);
 
   return useMemo(
-    () => cloneScene(gltf.scene, options?.wireframe ?? false),
-    [gltf.scene, options?.wireframe],
+    () => cloneScene(gltf.scene, options?.wireframe ?? false, options?.cloneMaterials ?? true),
+    [gltf.scene, options?.wireframe, options?.cloneMaterials],
   );
 }
 
 export function useFbxModel(
   src: string,
-  options?: { wireframe?: boolean },
+  options?: { wireframe?: boolean; cloneMaterials?: boolean },
 ) {
   const scene = useFBX(src);
 
@@ -78,7 +80,7 @@ export function useFbxModel(
   }, [src]);
 
   return useMemo(
-    () => cloneScene(scene, options?.wireframe ?? false),
-    [scene, options?.wireframe],
+    () => cloneScene(scene, options?.wireframe ?? false, options?.cloneMaterials ?? true),
+    [scene, options?.wireframe, options?.cloneMaterials],
   );
 }

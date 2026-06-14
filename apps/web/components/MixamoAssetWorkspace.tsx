@@ -681,7 +681,10 @@ function CharacterActions({
     if (norm.includes("talk") || norm.includes("speak") || norm.includes("dialogue") || norm.includes("bark") || norm.includes("chat") || norm.includes("say")) {
       return { trigger: "talk", keyBinding: "E" };
     }
-    if (norm.includes("walk") || norm.includes("run") || norm.includes("sprint") || norm.includes("move") || norm.includes("go") || norm.includes("idle")) {
+    if (norm.includes("idle") || norm.includes("stand") || norm.includes("breath") || norm.includes("rest")) {
+      return { trigger: "idle", keyBinding: null };
+    }
+    if (norm.includes("walk") || norm.includes("run") || norm.includes("sprint") || norm.includes("move") || norm.includes("go")) {
       return { trigger: "move", keyBinding: "W+A+S+D" };
     }
     if (norm.includes("attack") || norm.includes("slash") || norm.includes("kick") || norm.includes("punch") || norm.includes("fight") || norm.includes("shoot") || norm.includes("hit") || norm.includes("combo")) {
@@ -890,6 +893,7 @@ function CharacterActions({
                       <option value="talk">Talk</option>
                       <option value="crouch">Crouch</option>
                       <option value="jump">Jump</option>
+                      <option value="idle">Idle</option>
                       <option value="custom">Custom</option>
                     </select>
                   </div>

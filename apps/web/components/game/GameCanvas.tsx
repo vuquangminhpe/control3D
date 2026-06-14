@@ -2,7 +2,7 @@
 
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Canvas, useFrame, useLoader } from "@react-three/fiber";
-import { Physics } from "@react-three/rapier";
+import { Physics, RigidBody } from "@react-three/rapier";
 import { OrbitControls, Html, Environment, Sky, Line, useGLTF } from "@react-three/drei";
 import { FBXLoader } from "three-stdlib";
 import * as THREE from "three";
@@ -12,6 +12,7 @@ import { Player } from "./Player";
 import { Terrain } from "./Terrain";
 import { FloatingDamage, prewarmDamageTextures } from "./FloatingDamage";
 import { ModelLoader } from "@/components/3d/ModelLoader";
+import { CharacterEnemyBot, NpcBot } from "./EnemyBot";
 import { preload3DModel } from "@/hooks/use3DModel";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 
@@ -160,6 +161,30 @@ function FloatingDamageLayer() {
   );
 }
 
+function isEnvironmentAsset(name: string, fileUrl: string) {
+  const lowerName = name.toLowerCase();
+  const lowerUrl = fileUrl.toLowerCase();
+  return (
+    lowerName.includes("map") ||
+    lowerName.includes("terrain") ||
+    lowerName.includes("env") ||
+    lowerName.includes("ground") ||
+    lowerName.includes("scene") ||
+    lowerName.includes("building") ||
+    lowerName.includes("dungeon") ||
+    lowerName.includes("sector") ||
+    lowerName.includes("level") ||
+    lowerName.includes("room") ||
+    lowerName.includes("floor") ||
+    lowerName.includes("cliff") ||
+    lowerName.includes("rock") ||
+    lowerName.includes("road") ||
+    lowerUrl.includes("map") ||
+    lowerUrl.includes("terrain") ||
+    lowerUrl.includes("environment")
+  );
+}
+
 function PlacedObjectLayer() {
   const placedObjects = useGameStore((state) => state.activeLevel.placedObjects);
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
@@ -167,25 +192,52 @@ function PlacedObjectLayer() {
 
   return (
     <>
-      {placedObjects.map((object, index) => (
-        <group
-          key={`${object.id}-${index}`}
-          position={object.position}
-          rotation={[
-            object.rotation[0] * Math.PI / 180,
-            object.rotation[1] * Math.PI / 180,
-            object.rotation[2] * Math.PI / 180,
-          ]}
-          scale={object.scale}
-        >
-          <ModelLoader
-            debugLabel={`runtime-placed-object:${object.name}`}
-            fitMaxSize={placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)}
-            groundToY={0}
-            src={object.fileUrl}
-          />
-        </group>
-      ))}
+      {placedObjects.map((object, index) => {
+        const isEnv = object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
+        const rotRad: [number, number, number] = [
+          (object.rotation[0] * Math.PI) / 180,
+          (object.rotation[1] * Math.PI) / 180,
+          (object.rotation[2] * Math.PI) / 180,
+        ];
+        
+        const loader = (
+          <Suspense fallback={null}>
+            <ModelLoader
+              debugLabel={`runtime-placed-object:${object.name}`}
+              fitMaxSize={isEnv ? 92 * mapScaleRatio : placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)}
+              groundToY={0}
+              src={object.fileUrl}
+              markAsTerrain={isEnv}
+            />
+          </Suspense>
+        );
+
+        if (isEnv) {
+          return (
+            <RigidBody
+              key={`${object.id}-${index}`}
+              type="fixed"
+              colliders="trimesh"
+              position={object.position}
+              rotation={rotRad}
+              scale={object.scale}
+            >
+              {loader}
+            </RigidBody>
+          );
+        }
+
+        return (
+          <group
+            key={`${object.id}-${index}`}
+            position={object.position}
+            rotation={rotRad}
+            scale={object.scale}
+          >
+            {loader}
+          </group>
+        );
+      })}
     </>
   );
 }
@@ -429,6 +481,8 @@ export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
   const activeLevel = useGameStore((state) => state.activeLevel);
   const hasMap = Boolean(activeLevel.mapModelUrl);
   const hasPlayerCharacter = Boolean(activeLevel.playerCharacter?.fileUrl);
+  const enemies = useGameStore((state) => state.enemies);
+  const robotPosition = useGameStore((state) => state.robotPosition);
 
   const handleTerrainReady = useCallback((scene: THREE.Object3D) => {
     setTerrainScene(scene);
@@ -509,7 +563,18 @@ export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
             {groundReady ? <PlacedObjectLayer /> : null}
 
             {/* Playable Character */}
-            {groundReady && hasPlayerCharacter ? <Player key={`player-${worldVersion}`} /> : null}
+            {groundReady && hasPlayerCharacter ? (
+              <Player key={`player-${worldVersion}`} playerActions={playerActions} />
+            ) : null}
+
+            {/* Enemies & NPC Bots */}
+            {groundReady &&
+              enemies.map((enemy) => (
+                <CharacterEnemyBot key={enemy.id} enemy={enemy} mapScaleRatio={mapScaleRatio} />
+              ))}
+            {groundReady && activeLevel.robotSpawn ? (
+              <NpcBot position={robotPosition} npcId="robot" />
+            ) : null}
 
           </Physics>
 

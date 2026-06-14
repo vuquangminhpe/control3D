@@ -27,105 +27,109 @@ function isFbxSource(url: string) {
   return normalized.endsWith(".fbx");
 }
 
-function AnimationMixerController({ model, clip }: { model: THREE.Object3D; clip: THREE.AnimationClip }) {
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+export function makeClipInPlace(clip: THREE.AnimationClip): THREE.AnimationClip {
+  const processed = clip.clone();
+  processed.tracks.forEach((track) => {
+    const lowerName = track.name.toLowerCase();
+    if (
+      track.name.endsWith(".position") &&
+      (lowerName.includes("hips") ||
+        lowerName.includes("root") ||
+        lowerName.includes("pelvis") ||
+        lowerName.includes("bip001") ||
+        lowerName.includes("rig"))
+    ) {
+      const values = track.values;
+      if (values && values.length >= 3) {
+        for (let i = 0; i < values.length; i += 3) {
+          values[i] = 0; // Force X to 0
+          values[i + 2] = 0; // Force Z to 0
+        }
+      }
+    }
+  });
+  return processed;
+}
+
+function AnimationActionExecutor({
+  clip,
+  mixerRef,
+}: {
+  clip: THREE.AnimationClip;
+  mixerRef: React.MutableRefObject<THREE.AnimationMixer | null>;
+}) {
+  const processedClip = useMemo(() => makeClipInPlace(clip), [clip]);
 
   useEffect(() => {
-    const mixer = new THREE.AnimationMixer(model);
-    mixerRef.current = mixer;
+    const mixer = mixerRef.current;
+    if (!mixer) return;
 
-    const action = mixer.clipAction(clip);
+    const action = mixer.clipAction(processedClip);
     action.reset();
     action.setLoop(THREE.LoopRepeat, Infinity);
     action.enabled = true;
     action.play();
+    action.fadeIn(0.2);
+
+    // Fade out other actions
+    // @ts-ignore
+    const mixerActions = mixer._actions as THREE.AnimationAction[];
+    if (mixerActions && Array.isArray(mixerActions)) {
+      mixerActions.forEach((act) => {
+        if (act !== action) {
+          act.fadeOut(0.2);
+        }
+      });
+    }
 
     return () => {
-      action.stop();
-      mixer.stopAllAction();
-      mixer.uncacheRoot(model);
-      mixerRef.current = null;
+      action.fadeOut(0.2);
     };
-  }, [model, clip]);
-
-  useFrame((_, delta) => {
-    if (mixerRef.current) {
-      mixerRef.current.update(delta);
-    }
-  });
+  }, [clip, processedClip, mixerRef]);
 
   return null;
 }
 
-type PlayerAnimationPlayerProps = {
-  modelSrc: string;
+function FbxAnimationActionPlayer({
+  animationUrl,
+  mixerRef,
+}: {
   animationUrl: string;
-  fitHeight: number;
-};
-
-function FbxAnimationLoader({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+  mixerRef: React.MutableRefObject<THREE.AnimationMixer | null>;
+}) {
   const animFbx = useLoader(FBXLoader, animationUrl);
-  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
   const clip = animFbx.animations?.[0];
 
-  return (
-    <>
-      <Suspense fallback={null}>
-        <ModelLoader
-          debugLabel="runtime-player-visual-fbx-anim"
-          fitHeight={fitHeight}
-          groundToY={0}
-          src={modelSrc}
-          onSceneReady={setModelScene}
-        />
-      </Suspense>
-      {modelScene && clip && <AnimationMixerController model={modelScene} clip={clip} />}
-    </>
-  );
+  return clip ? <AnimationActionExecutor clip={clip} mixerRef={mixerRef} /> : null;
 }
 
-function GltfAnimationLoader({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+function GltfAnimationActionPlayer({
+  animationUrl,
+  mixerRef,
+}: {
+  animationUrl: string;
+  mixerRef: React.MutableRefObject<THREE.AnimationMixer | null>;
+}) {
   const { animations } = useGLTF(animationUrl, "https://www.gstatic.com/draco/v1/decoders/");
-  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
   const clip = animations?.[0];
 
-  return (
-    <>
-      <Suspense fallback={null}>
-        <ModelLoader
-          debugLabel="runtime-player-visual-gltf-anim"
-          fitHeight={fitHeight}
-          groundToY={0}
-          src={modelSrc}
-          onSceneReady={setModelScene}
-        />
-      </Suspense>
-      {modelScene && clip && <AnimationMixerController model={modelScene} clip={clip} />}
-    </>
-  );
+  return clip ? <AnimationActionExecutor clip={clip} mixerRef={mixerRef} /> : null;
 }
 
-function PlayerAnimationPlayer({ modelSrc, animationUrl, fitHeight }: PlayerAnimationPlayerProps) {
+function AnimationActionPlayer({
+  animationUrl,
+  mixerRef,
+}: {
+  animationUrl: string;
+  mixerRef: React.MutableRefObject<THREE.AnimationMixer | null>;
+}) {
   const isAnimFbx = isFbxSource(animationUrl);
 
   if (isAnimFbx) {
-    return <FbxAnimationLoader modelSrc={modelSrc} animationUrl={animationUrl} fitHeight={fitHeight} />;
+    return <FbxAnimationActionPlayer animationUrl={animationUrl} mixerRef={mixerRef} />;
   } else {
-    return <GltfAnimationLoader modelSrc={modelSrc} animationUrl={animationUrl} fitHeight={fitHeight} />;
+    return <GltfAnimationActionPlayer animationUrl={animationUrl} mixerRef={mixerRef} />;
   }
-}
-
-function StaticPlayerVisual({ modelSrc, fitHeight }: { modelSrc: string; fitHeight: number }) {
-  return (
-    <Suspense fallback={null}>
-      <ModelLoader
-        debugLabel="runtime-player-visual-static"
-        fitHeight={fitHeight}
-        groundToY={0}
-        src={modelSrc}
-      />
-    </Suspense>
-  );
 }
 
 interface AnimationErrorBoundaryProps {
@@ -162,33 +166,68 @@ class AnimationErrorBoundary extends React.Component<AnimationErrorBoundaryProps
   }
 }
 
-function CustomPlayerVisual({ src }: { src: string }) {
+function CustomPlayerVisual({ src, playerActions = [] }: { src: string; playerActions?: any[] }) {
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const fitHeight = 1.85 * mapScaleRatio;
   const activeGameplayActionUrl = useGameStore((state) => state.activeGameplayActionUrl);
 
+  const idleAction = useMemo(() => {
+    return playerActions?.find((a) => a.enabled && a.trigger === "idle");
+  }, [playerActions]);
+
+  const animationUrl = activeGameplayActionUrl || idleAction?.fileUrl;
+
+  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+
+  useEffect(() => {
+    if (!modelScene) return;
+    const mixer = new THREE.AnimationMixer(modelScene);
+    mixerRef.current = mixer;
+    return () => {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(modelScene);
+      mixerRef.current = null;
+    };
+  }, [modelScene]);
+
+  useFrame((_, delta) => {
+    if (mixerRef.current) {
+      mixerRef.current.update(delta);
+    }
+  });
+
   log3DDebug(
-    `player-visual:${src}:${fitHeight}:${activeGameplayActionUrl ?? "none"}`,
+    `player-visual:${src}:${fitHeight}:${animationUrl ?? "none"}`,
     "Player visual fit",
-    { src, mapScaleRatio, fitHeight, activeGameplayActionUrl },
+    { src, mapScaleRatio, fitHeight, animationUrl },
     { once: true },
   );
 
   return (
     <group position={[0, 0, 0]}>
-      {activeGameplayActionUrl ? (
-        <AnimationErrorBoundary
-          key={activeGameplayActionUrl}
-          onClearAction={() => useGameStore.getState().setActiveGameplayAction(null, null)}
-        >
-          <PlayerAnimationPlayer
-            modelSrc={src}
-            animationUrl={activeGameplayActionUrl}
-            fitHeight={fitHeight}
-          />
-        </AnimationErrorBoundary>
-      ) : (
-        <StaticPlayerVisual modelSrc={src} fitHeight={fitHeight} />
+      <Suspense fallback={null}>
+        <ModelLoader
+          debugLabel="runtime-player-visual-main"
+          fitHeight={fitHeight}
+          groundToY={0}
+          src={src}
+          onSceneReady={setModelScene}
+        />
+      </Suspense>
+
+      {modelScene && animationUrl && (
+        <Suspense fallback={null}>
+          <AnimationErrorBoundary
+            key={animationUrl}
+            onClearAction={() => useGameStore.getState().setActiveGameplayAction(null, null)}
+          >
+            <AnimationActionPlayer
+              animationUrl={animationUrl}
+              mixerRef={mixerRef}
+            />
+          </AnimationErrorBoundary>
+        </Suspense>
       )}
     </group>
   );
@@ -208,7 +247,7 @@ function buildBowTrajectory(origin: THREE.Vector3, velocity: THREE.Vector3, mapS
   return points;
 }
 
-export function Player() {
+export function Player({ playerActions = [] }: { playerActions?: any[] }) {
   const rigidBodyRef = useRef<any>(null);
   const playerNodeRef = useRef<THREE.Group>(null);
   const initialPlayerPositionRef = useRef<[number, number, number]>([...useGameStore.getState().playerPosition]);
@@ -262,10 +301,27 @@ export function Player() {
   const bowReleaseUntilMsRef = useRef(0);
   const bowReleaseTimeoutRef = useRef<number | null>(null);
   const previousBowFireHeldRef = useRef(false);
+  
+  // Animation timeout for clean interruption
+  const animationTimeoutRef = useRef<number | null>(null);
 
   // Speed configuration
   const speed = 7 * mapScaleRatio;
   const rotationSpeed = 10;
+
+  const playAnimation = useCallback((fileUrl: string | null, name: string | null, durationMs?: number) => {
+    if (animationTimeoutRef.current !== null) {
+      window.clearTimeout(animationTimeoutRef.current);
+      animationTimeoutRef.current = null;
+    }
+    useGameStore.getState().setActiveGameplayAction(fileUrl, name);
+    if (fileUrl && durationMs) {
+      animationTimeoutRef.current = window.setTimeout(() => {
+        useGameStore.getState().setActiveGameplayAction(null, null);
+        animationTimeoutRef.current = null;
+      }, durationMs);
+    }
+  }, []);
 
   const clearAttackRecoveryTimeout = useCallback(() => {
     if (attackRecoveryTimeoutRef.current !== null) {
@@ -295,10 +351,11 @@ export function Player() {
     hasHitThisSwing.current = false;
     triggerAttackEnd();
     setActionState("idle");
+    playAnimation(null, null);
     window.setTimeout(() => {
       setComboStep(0);
     }, 800);
-  }, [clearAttackRecoveryTimeout, triggerAttackEnd]);
+  }, [clearAttackRecoveryTimeout, triggerAttackEnd, playAnimation]);
 
   const beginAttack = useCallback((
     action: string,
@@ -314,10 +371,24 @@ export function Player() {
     setComboStep(combo);
     setActionState(action);
     triggerAttackStart(combo);
+
+    // Find and play matching attack animation
+    const attackAction = playerActions.find((a) => {
+      if (!a.enabled || a.trigger !== "attack") return false;
+      const lowerName = a.name.toLowerCase();
+      if (action === "slash") return lowerName.includes("slash") || lowerName.includes("combo") || lowerName.includes("2");
+      if (action === "kick") return lowerName.includes("kick") || lowerName.includes("heavy") || lowerName.includes("3");
+      return lowerName.includes("attack") || lowerName.includes("light") || lowerName.includes("1");
+    }) || playerActions.find((a) => a.enabled && a.trigger === "attack");
+
+    if (attackAction) {
+      playAnimation(attackAction.fileUrl, attackAction.name, recoveryMs);
+    }
+
     attackRecoveryTimeoutRef.current = window.setTimeout(() => {
       finishAttackAnimation();
     }, recoveryMs);
-  }, [clearAttackRecoveryTimeout, finishAttackAnimation, triggerAttackStart]);
+  }, [clearAttackRecoveryTimeout, finishAttackAnimation, triggerAttackStart, playerActions, playAnimation]);
 
   const handleJump = useCallback(() => {
     if (!rigidBodyRef.current || jumpActiveRef.current || groundedContactsRef.current <= 0 || bowAimingRef.current) {
@@ -328,8 +399,14 @@ export function Player() {
     const currentVel = body.linvel();
     jumpActiveRef.current = true;
     setActionState("jump");
+
+    const jumpAction = playerActions.find((a) => a.enabled && a.trigger === "jump");
+    if (jumpAction) {
+      playAnimation(jumpAction.fileUrl, jumpAction.name, jumpAction.durationMs || 1000);
+    }
+
     body.setLinvel({ x: currentVel.x, y: 6.8 * mapScaleRatio, z: currentVel.z }, true);
-  }, [mapScaleRatio]);
+  }, [mapScaleRatio, playerActions, playAnimation]);
 
   const startBowAim = useCallback(() => {
     const gameState = useGameStore.getState();
@@ -461,6 +538,10 @@ export function Player() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (playerHp <= 0 || activeDialogueNpcId) return;
 
+      if (e.code === "Space") {
+        e.preventDefault();
+      }
+
       const key = e.key.toLowerCase();
       if (["w", "arrowup"].includes(key)) setKeys((k) => ({ ...k, w: true }));
       if (["s", "arrowdown"].includes(key)) setKeys((k) => ({ ...k, s: true }));
@@ -469,6 +550,70 @@ export function Player() {
       if (e.key === "Shift") {
         setKeys((k) => ({ ...k, Shift: true }));
         blockActiveRef.current = true;
+        
+        // Play block animation
+        const blockAction = playerActions.find((a) => a.enabled && (a.trigger === "crouch" || a.name.toLowerCase().includes("block") || a.name.toLowerCase().includes("shield")));
+        if (blockAction) {
+          playAnimation(blockAction.fileUrl, blockAction.name);
+        }
+      }
+
+      // Check for custom key bindings
+      let pressedKey = e.key;
+      if (e.code === "Space") {
+        pressedKey = "SPACE";
+      }
+      const pressedCombo = pressedKey.toUpperCase();
+
+      if (e.code === "Space") {
+        console.log("[Space Key Down] pressedCombo:", pressedCombo);
+        console.log("[Space Key Down] All playerActions:", playerActions.map((a) => ({
+          name: a.name,
+          enabled: a.enabled,
+          trigger: a.trigger,
+          keyBinding: a.keyBinding,
+        })));
+      }
+
+      const customAction = playerActions.find(
+        (a) =>
+          a.enabled &&
+          a.trigger !== "move" &&
+          a.keyBinding?.toUpperCase() === pressedCombo
+      );
+
+      if (e.code === "Space" && customAction) {
+        console.log("[Space Key Down] Matched custom action:", customAction.name);
+      }
+
+      if (customAction && !isAttackingRef.current && !jumpActiveRef.current && actionState !== "hit") {
+        playAnimation(customAction.fileUrl, customAction.name, customAction.durationMs || (customAction.trigger === "jump" ? 1000 : 1500));
+        
+        if (customAction.trigger === "jump" && rigidBodyRef.current) {
+          const body = rigidBodyRef.current;
+          const currentVel = body.linvel();
+          jumpActiveRef.current = true;
+          setActionState("jump");
+          body.setLinvel({ x: currentVel.x, y: 6.8 * mapScaleRatio, z: currentVel.z }, true);
+        }
+        
+        return;
+      }
+
+      // Talk to NPC if within range
+      if (key === "e") {
+        const robotPos = useGameStore.getState().robotPosition;
+        const playerPos = rigidBodyRef.current?.translation();
+        if (playerPos && robotPos) {
+          const dx = playerPos.x - robotPos[0];
+          const dy = playerPos.y - robotPos[1];
+          const dz = playerPos.z - robotPos[2];
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < 3) {
+            useGameStore.getState().startDialogue("robot");
+            return;
+          }
+        }
       }
 
       if (key === "j" && !isAttackingRef.current) {
@@ -492,6 +637,12 @@ export function Player() {
       if (e.key === "Shift") {
         setKeys((k) => ({ ...k, Shift: false }));
         blockActiveRef.current = false;
+        
+        // Clear block animation
+        const blockAction = playerActions.find((a) => a.enabled && (a.trigger === "crouch" || a.name.toLowerCase().includes("block") || a.name.toLowerCase().includes("shield")));
+        if (blockAction && useGameStore.getState().activeGameplayActionUrl === blockAction.fileUrl) {
+          playAnimation(null, null);
+        }
       }
     };
 
@@ -526,7 +677,7 @@ export function Player() {
       window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("contextmenu", handleContextMenu);
     };
-  }, [activeDialogueNpcId, handleAttack, handleJump, playerHp, shootBow, startBowAim]);
+  }, [activeDialogueNpcId, handleAttack, handleJump, playerHp, shootBow, startBowAim, playerActions, playAnimation, actionState]);
 
   useEffect(() => {
     return () => {
@@ -534,6 +685,9 @@ export function Player() {
       clearHitRecoveryTimeout();
       clearBowReleaseTimeout();
       clearBowAim();
+      if (animationTimeoutRef.current !== null) {
+        window.clearTimeout(animationTimeoutRef.current);
+      }
     };
   }, [clearAttackRecoveryTimeout, clearBowAim, clearBowReleaseTimeout, clearHitRecoveryTimeout]);
 
@@ -762,9 +916,23 @@ export function Player() {
         if (actionState !== newAction) setActionState(newAction);
       }
 
+      // Play move animation if not already playing and not locked by other actions
+      if (!jumpActiveRef.current && !isAttackingRef.current && actionState !== "hit" && !blockActiveRef.current) {
+        const moveAction = playerActions.find((a) => a.enabled && a.trigger === "move");
+        if (moveAction && useGameStore.getState().activeGameplayActionUrl !== moveAction.fileUrl) {
+          playAnimation(moveAction.fileUrl, moveAction.name);
+        }
+      }
+
     } else {
       // No movement
       if (!jumpActiveRef.current && actionState !== "idle") setActionState("idle");
+
+      // If we were playing a move action and stopped, clear it
+      const moveAction = playerActions.find((a) => a.enabled && a.trigger === "move");
+      if (moveAction && useGameStore.getState().activeGameplayActionUrl === moveAction.fileUrl) {
+        playAnimation(null, null);
+      }
     }
 
     if (jumpActiveRef.current && isGrounded) {
@@ -826,7 +994,7 @@ export function Player() {
         }}
       />
       <group ref={playerNodeRef}>
-        {playerCharacter?.fileUrl ? <CustomPlayerVisual src={playerCharacter.fileUrl} /> : null}
+        {playerCharacter?.fileUrl ? <CustomPlayerVisual src={playerCharacter.fileUrl} playerActions={playerActions} /> : null}
       </group>
     </RigidBody>
   );

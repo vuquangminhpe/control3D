@@ -2384,3 +2384,71 @@
     top: 72px;
   }
 }
+
+/* Enemy and NPC Bot Styles */
+.enemy-health-bar-container {
+  width: 58px;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 1px;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.enemy-health-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff3b3b, #ff7b7b);
+  border-radius: 3px;
+  transition: width 0.18s ease-out;
+}
+
+.npc-prompt-bubble {
+  color: #ffffff;
+  background: rgba(10, 15, 30, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(59, 130, 246, 0.54);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    0 0 12px rgba(59, 130, 246, 0.26);
+  white-space: nowrap;
+  animation: npcPromptPulse 2.4s infinite ease-in-out;
+  pointer-events: none;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.npc-prompt-bubble .prompt-key {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.16);
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  margin: 0 4px;
+  display: inline-block;
+  font-weight: 900;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes npcPromptPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.95;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+    border-color: rgba(59, 130, 246, 0.82);
+    box-shadow: 
+      0 8px 32px rgba(0, 0, 0, 0.5),
+      0 0 16px rgba(59, 130, 246, 0.45);
+  }
+}
