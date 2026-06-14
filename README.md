@@ -26,7 +26,6 @@ Monorepo for the 3D Object Management MVP.
 
 6. Bug and update plant:
    - Additional development will be needed for story handling, especially the if/else logic in the map connections between characters (Need to add preview check actions in the story to increase interactivity and improve processing).
-   - Update Multi map
    - I will remove auto-rigs in the future because it's not as well-developed as Mixamo; I'm just labeling that part as "research +" instead of "production".
    - Processing productions should still be done on Mixamo, which would be more logical.
    - Handling lighting angles, etc., should still be left to specialized software like Blender, instead of applying it to FE because it's not good enough.

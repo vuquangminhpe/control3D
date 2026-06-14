@@ -23,6 +23,7 @@ type ModelLoaderProps = {
   onSceneReady?: (scene: THREE.Object3D | null) => void;
   src: string;
   wireframe?: boolean;
+  ignoreRaycast?: boolean;
 };
 
 export type ModelLoaderMetrics = {
@@ -472,6 +473,7 @@ function LoadedObjModel({
   onSceneReady,
   src,
   wireframe = false,
+  ignoreRaycast,
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const source = useLoader(OBJLoader, src);
@@ -490,6 +492,18 @@ function LoadedObjModel({
     () => cloneObjectScene(source, wireframe, markAsTerrain),
     [markAsTerrain, source, wireframe],
   );
+
+  useEffect(() => {
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (ignoreRaycast) {
+          child.userData.ignoreBuilderRaycast = true;
+        } else {
+          delete child.userData.ignoreBuilderRaycast;
+        }
+      }
+    });
+  }, [ignoreRaycast, scene]);
   const fitScale = useMemo(
     () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
     [debugContext, fitHeight, fitMaxSize, scene],
@@ -532,6 +546,7 @@ function GeometryModel({
   onSceneReady,
   src,
   wireframe = false,
+  ignoreRaycast,
 }: ModelLoaderProps & { geometry: THREE.BufferGeometry }) {
   const meshRef = useRef<THREE.Mesh | null>(null);
   const debugContext = useMemo<ModelDebugContext>(() => ({
@@ -608,7 +623,10 @@ function GeometryModel({
       receiveShadow
       ref={meshRef}
       scale={fitScale}
-      userData={markAsTerrain ? { isTerrainSurface: true } : undefined}
+      userData={{
+        ...(markAsTerrain ? { isTerrainSurface: true } : {}),
+        ...(ignoreRaycast ? { ignoreBuilderRaycast: true } : {}),
+      }}
     >
       <meshStandardMaterial color="#b9b9b9" metalness={0.08} roughness={0.64} wireframe={wireframe} />
     </mesh>
@@ -638,6 +656,7 @@ function LoadedModel({
   onSceneReady,
   src,
   wireframe = false,
+  ignoreRaycast,
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const scene = use3DModel(src, { wireframe, cloneMaterials: !markAsTerrain });
@@ -660,21 +679,35 @@ function LoadedModel({
   }, [markAsTerrain, scene]);
 
   useEffect(() => {
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (ignoreRaycast) {
+          child.userData.ignoreBuilderRaycast = true;
+        } else {
+          delete child.userData.ignoreBuilderRaycast;
+        }
+      }
+    });
+  }, [ignoreRaycast, scene]);
+
+  useEffect(() => {
     return () => {
-      scene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) {
-            if (Array.isArray(child.material)) {
-              child.material.forEach((mat) => mat.dispose());
-            } else {
-              child.material.dispose();
+      const cloneMaterials = !markAsTerrain;
+      if (cloneMaterials) {
+        scene.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => mat.dispose());
+              } else {
+                child.material.dispose();
+              }
             }
           }
-        }
-      });
+        });
+      }
     };
-  }, [scene]);
+  }, [scene, markAsTerrain]);
   const fitScale = useMemo(
     () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
     [debugContext, fitHeight, fitMaxSize, scene],
@@ -716,6 +749,7 @@ function LoadedFbxModel({
   onSceneReady,
   src,
   wireframe = false,
+  ignoreRaycast,
 }: ModelLoaderProps) {
   const groupRef = useRef<THREE.Group | null>(null);
   const scene = useFbxModel(src, { wireframe, cloneMaterials: !markAsTerrain });
@@ -738,21 +772,35 @@ function LoadedFbxModel({
   }, [markAsTerrain, scene]);
 
   useEffect(() => {
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (ignoreRaycast) {
+          child.userData.ignoreBuilderRaycast = true;
+        } else {
+          delete child.userData.ignoreBuilderRaycast;
+        }
+      }
+    });
+  }, [ignoreRaycast, scene]);
+
+  useEffect(() => {
     return () => {
-      scene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) {
-            if (Array.isArray(child.material)) {
-              child.material.forEach((mat) => mat.dispose());
-            } else {
-              child.material.dispose();
+      const cloneMaterials = !markAsTerrain;
+      if (cloneMaterials) {
+        scene.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => mat.dispose());
+              } else {
+                child.material.dispose();
+              }
             }
           }
-        }
-      });
+        });
+      }
     };
-  }, [scene]);
+  }, [scene, markAsTerrain]);
   const fitScale = useMemo(
     () => getSceneFitScale(scene, fitHeight, fitMaxSize, debugContext),
     [debugContext, fitHeight, fitMaxSize, scene],

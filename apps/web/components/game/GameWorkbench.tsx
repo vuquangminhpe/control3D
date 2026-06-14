@@ -1051,12 +1051,14 @@ function PlacedObjectMarker({
   onCommit,
   onSelect,
   selected,
+  transformMode = "translate",
 }: {
   fitMaxSize: number;
   object: PlacedObject;
   onCommit: (updates: Partial<PlacedObject>) => void;
   onSelect: () => void;
   selected: boolean;
+  transformMode?: "translate" | "rotate" | "scale";
 }) {
   const groupRef = useRef<THREE.Group | null>(null);
 
@@ -1074,7 +1076,7 @@ function PlacedObjectMarker({
     });
   };
 
-  const isEnv = isEnvironmentAsset(object.name, object.fileUrl);
+  const isEnv = object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
   const adjustedSize = isEnv
     ? EDITOR_MAP_MAX_SIZE
     : fitMaxSize * getIntelligentScaleMultiplier(object.name);
@@ -1104,6 +1106,7 @@ function PlacedObjectMarker({
             groundToY={0}
             src={object.fileUrl}
             markAsTerrain={isEnv}
+            ignoreRaycast={selected}
           />
         </Suspense>
         {selected ? (
@@ -1123,7 +1126,7 @@ function PlacedObjectMarker({
       {selected && groupRef.current ? (
         <TransformControls
           object={groupRef.current}
-          mode="translate"
+          mode={transformMode}
           onMouseUp={commitTransform}
         />
       ) : null}
@@ -1138,6 +1141,14 @@ function LevelBuilderViewport({
   setAssetLibrary,
   setDraft,
   setSelectedAssetId,
+  selectedCoreId,
+  setSelectedCoreId,
+  selectedObjectId,
+  setSelectedObjectId,
+  transformMode,
+  setTransformMode,
+  updatePlacedObject,
+  removePlacedObject,
 }: {
   assetLibrary: AssetLibraryItem[];
   draft: EditableLevelDraft;
@@ -1145,6 +1156,14 @@ function LevelBuilderViewport({
   setAssetLibrary: Dispatch<SetStateAction<AssetLibraryItem[]>>;
   setDraft: Dispatch<SetStateAction<EditableLevelDraft>>;
   setSelectedAssetId: Dispatch<SetStateAction<string>>;
+  selectedCoreId: string;
+  setSelectedCoreId: Dispatch<SetStateAction<string>>;
+  selectedObjectId: string;
+  setSelectedObjectId: Dispatch<SetStateAction<string>>;
+  transformMode: "translate" | "rotate" | "scale";
+  setTransformMode: Dispatch<SetStateAction<"translate" | "rotate" | "scale">>;
+  updatePlacedObject: (objectId: string, updates: Partial<PlacedObject>) => void;
+  removePlacedObject: (objectId: string) => void;
 }) {
   const [placementTool, setPlacementTool] = useState<PlacementTool>("player");
   const [savingActionId, setSavingActionId] = useState<string | null>(null);
@@ -1158,8 +1177,30 @@ function LevelBuilderViewport({
     },
     { intervalMs: 1000 },
   );
-  const [selectedCoreId, setSelectedCoreId] = useState<string>("");
-  const [selectedObjectId, setSelectedObjectId] = useState<string>("");
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedObjectId) return;
+      if (
+        document.activeElement &&
+        (document.activeElement.tagName === "INPUT" ||
+          document.activeElement.tagName === "TEXTAREA" ||
+          document.activeElement.tagName === "SELECT")
+      ) {
+        return;
+      }
+      const key = e.key.toLowerCase();
+      if (key === "w") {
+        setTransformMode("translate");
+      } else if (key === "e") {
+        setTransformMode("rotate");
+      } else if (key === "r") {
+        setTransformMode("scale");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedObjectId, setTransformMode]);
+
   const [mapRelativeScale, setMapRelativeScale] = useState<MapRelativeScale>(
     DEFAULT_MAP_RELATIVE_SCALE,
   );
@@ -1460,28 +1501,6 @@ function LevelBuilderViewport({
     placeAt(event.point);
   };
 
-  const updatePlacedObject = (
-    objectId: string,
-    updates: Partial<PlacedObject>,
-  ) => {
-    setDraft((current) => ({
-      ...current,
-      placedObjects: current.placedObjects.map((object) =>
-        object.id === objectId ? { ...object, ...updates } : object,
-      ),
-    }));
-  };
-
-  const removePlacedObject = (objectId: string) => {
-    setDraft((current) => ({
-      ...current,
-      placedObjects: current.placedObjects.filter(
-        (object) => object.id !== objectId,
-      ),
-    }));
-    if (selectedObjectId === objectId) setSelectedObjectId("");
-  };
-
   const snapDraftToTerrain = () => {
     if (!terrainObjectRef.current) return;
     const mapScale = currentMapScale;
@@ -1501,15 +1520,20 @@ function LevelBuilderViewport({
             currentPlayerSpawn[1] - PLAYER_SPAWN_OFFSET * mapScale,
           ),
         ),
-        placedObjects: current.placedObjects.map((object) => ({
-          ...object,
-          position: entityPosition(
-            object.position[0],
-            object.position[2],
-            0,
-            object.position[1],
-          ),
-        })),
+        placedObjects: current.placedObjects.map((object) => {
+          const isObjEnv = object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
+          return {
+            ...object,
+            position: isObjEnv
+              ? object.position
+              : entityPosition(
+                  object.position[0],
+                  object.position[2],
+                  0,
+                  object.position[1],
+                ),
+          };
+        }),
       };
     });
   };
@@ -1729,7 +1753,7 @@ function LevelBuilderViewport({
       </aside>
 
       <div className="builder-viewport">
-        <div className="builder-viewport-meta">
+        <div className="builder-viewport-meta" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong>
             {placementTool === "object"
               ? (selectedAsset?.name ?? "Select a model")
@@ -1737,6 +1761,58 @@ function LevelBuilderViewport({
                 ? "Click ground to place player"
                 : "Choose player character"}
           </strong>
+          {selectedObjectId && (
+            <div className="gizmo-mode-selector" style={{ display: "flex", gap: "4px", marginLeft: "12px" }}>
+              <button
+                type="button"
+                style={{
+                  background: transformMode === "translate" ? "#00ffc4" : "rgba(255, 255, 255, 0.1)",
+                  color: transformMode === "translate" ? "#000" : "#fff",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "4px 8px",
+                  fontSize: "0.75rem",
+                  fontWeight: "bold",
+                  cursor: "pointer"
+                }}
+                onClick={() => setTransformMode("translate")}
+              >
+                Move (W)
+              </button>
+              <button
+                type="button"
+                style={{
+                  background: transformMode === "rotate" ? "#00ffc4" : "rgba(255, 255, 255, 0.1)",
+                  color: transformMode === "rotate" ? "#000" : "#fff",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "4px 8px",
+                  fontSize: "0.75rem",
+                  fontWeight: "bold",
+                  cursor: "pointer"
+                }}
+                onClick={() => setTransformMode("rotate")}
+              >
+                Rotate (E)
+              </button>
+              <button
+                type="button"
+                style={{
+                  background: transformMode === "scale" ? "#00ffc4" : "rgba(255, 255, 255, 0.1)",
+                  color: transformMode === "scale" ? "#000" : "#fff",
+                  border: "none",
+                  borderRadius: "4px",
+                  padding: "4px 8px",
+                  fontSize: "0.75rem",
+                  fontWeight: "bold",
+                  cursor: "pointer"
+                }}
+                onClick={() => setTransformMode("scale")}
+              >
+                Scale (R)
+              </button>
+            </div>
+          )}
         </div>
         <Canvas
           camera={{ position: [16, 14, 20], fov: 48 }}
@@ -1853,13 +1929,18 @@ function LevelBuilderViewport({
               fitMaxSize={mapRelativeScale.objectMaxSize}
               key={`${object.id}-${index}`}
               object={object}
+              transformMode={transformMode}
               onCommit={(updates) => {
+                const isObjEnv = object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
                 const position = updates.position
-                  ? entityPosition(
-                      updates.position[0],
-                      updates.position[2],
-                      0,
-                      updates.position[1],
+                  ? (isObjEnv
+                      ? ([Number(updates.position[0].toFixed(2)), Number(updates.position[1].toFixed(2)), Number(updates.position[2].toFixed(2))] as [number, number, number])
+                      : entityPosition(
+                          updates.position[0],
+                          updates.position[2],
+                          0,
+                          updates.position[1],
+                        )
                     )
                   : undefined;
                 updatePlacedObject(object.id, {
@@ -2031,6 +2112,32 @@ function LevelEditorPanel({
   const [mapUploadError, setMapUploadError] = useState<string | null>(null);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
 
+  const [selectedCoreId, setSelectedCoreId] = useState<string>("");
+  const [selectedObjectId, setSelectedObjectId] = useState<string>("");
+  const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
+
+  const updatePlacedObject = (
+    objectId: string,
+    updates: Partial<PlacedObject>,
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      placedObjects: current.placedObjects.map((object) =>
+        object.id === objectId ? { ...object, ...updates } : object,
+      ),
+    }));
+  };
+
+  const removePlacedObject = (objectId: string) => {
+    setDraft((current) => ({
+      ...current,
+      placedObjects: current.placedObjects.filter(
+        (object) => object.id !== objectId,
+      ),
+    }));
+    setSelectedObjectId((prev) => (prev === objectId ? "" : prev));
+  };
+
   const mapAssets = assetLibrary.filter((asset) => {
     const format =
       asset.format?.toLowerCase() ??
@@ -2125,6 +2232,14 @@ function LevelEditorPanel({
         setAssetLibrary={setAssetLibrary}
         setDraft={setDraft}
         setSelectedAssetId={setSelectedAssetId}
+        selectedCoreId={selectedCoreId}
+        setSelectedCoreId={setSelectedCoreId}
+        selectedObjectId={selectedObjectId}
+        setSelectedObjectId={setSelectedObjectId}
+        transformMode={transformMode}
+        setTransformMode={setTransformMode}
+        updatePlacedObject={updatePlacedObject}
+        removePlacedObject={removePlacedObject}
       />
 
       <div className="editor-liquid-dock">
@@ -2170,46 +2285,95 @@ function LevelEditorPanel({
                 {draft.placedObjects
                   .filter((object) => object.isMap || isEnvironmentAsset(object.name, object.fileUrl))
                   .map((object, index) => {
+                    const isSelected = selectedObjectId === object.id;
                     return (
                       <div
                         key={`${object.id}-${index}`}
-                        className="active-map-item"
+                        className={`active-map-item${isSelected ? " active" : ""}`}
                         style={{
                           display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "6px 10px",
-                          background: "rgba(255, 255, 255, 0.05)",
-                          border: "1px solid rgba(255, 255, 255, 0.1)",
+                          flexDirection: "column",
+                          gap: "6px",
+                          padding: "8px 10px",
+                          background: isSelected ? "rgba(0, 255, 196, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                          border: isSelected ? "1px solid #00ffc4" : "1px solid rgba(255, 255, 255, 0.1)",
                           borderRadius: "6px",
                           fontSize: "0.85rem",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => {
+                          setSelectedCoreId("");
+                          setSelectedObjectId(object.id);
                         }}
                       >
-                        <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", maxWidth: "180px" }}>
-                          {object.name || object.fileUrl.split("/").pop()}
-                        </span>
-                        <button
-                          type="button"
-                          style={{
-                            background: "#ef4444",
-                            color: "#fff",
-                            border: "none",
-                            borderRadius: "4px",
-                            padding: "2px 8px",
-                            cursor: "pointer",
-                            fontSize: "0.75rem",
-                          }}
-                          onClick={() => {
-                            setDraft((current) => ({
-                              ...current,
-                              placedObjects: current.placedObjects.filter(
-                                (obj) => obj.id !== object.id,
-                              ),
-                            }));
-                          }}
-                        >
-                          Remove
-                        </button>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                          <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", maxWidth: "180px", fontWeight: isSelected ? "bold" : "normal" }}>
+                            {object.name || object.fileUrl.split("/").pop()}
+                          </span>
+                          <button
+                            type="button"
+                            style={{
+                              background: "#ef4444",
+                              color: "#fff",
+                              border: "none",
+                              borderRadius: "4px",
+                              padding: "2px 8px",
+                              cursor: "pointer",
+                              fontSize: "0.75rem",
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removePlacedObject(object.id);
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        {isSelected && (
+                          <div style={{ display: "flex", gap: "8px", marginTop: "4px" }} onClick={(e) => e.stopPropagation()}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px", flex: 1 }}>
+                              <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.6)" }}>Scale</span>
+                              <select
+                                style={{ background: "#111b30", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "4px", padding: "2px", fontSize: "0.75rem" }}
+                                value={formatVector(object.scale)}
+                                onChange={(event) => {
+                                  const parsed = parseVector(event.target.value);
+                                  if (parsed) updatePlacedObject(object.id, { scale: parsed });
+                                }}
+                              >
+                                <option value="0.25, 0.25, 0.25">0.25x</option>
+                                <option value="0.5, 0.5, 0.5">0.5x</option>
+                                <option value="0.75, 0.75, 0.75">0.75x</option>
+                                <option value="1, 1, 1">1.0x (Normal)</option>
+                                <option value="1.25, 1.25, 1.25">1.25x</option>
+                                <option value="1.5, 1.5, 1.5">1.5x</option>
+                                <option value="2, 2, 2">2.0x</option>
+                              </select>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px", flex: 1 }}>
+                              <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.6)" }}>Rotate Y</span>
+                              <select
+                                style={{ background: "#111b30", color: "#fff", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "4px", padding: "2px", fontSize: "0.75rem" }}
+                                value={object.rotation[1].toString()}
+                                onChange={(event) => {
+                                  const rotY = Number(event.target.value);
+                                  if (Number.isFinite(rotY)) {
+                                    updatePlacedObject(object.id, { rotation: [object.rotation[0], rotY, object.rotation[2]] });
+                                  }
+                                }}
+                              >
+                                <option value="0">0°</option>
+                                <option value="45">45°</option>
+                                <option value="90">90°</option>
+                                <option value="135">135°</option>
+                                <option value="180">180°</option>
+                                <option value="225">225°</option>
+                                <option value="270">270°</option>
+                                <option value="315">315°</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
