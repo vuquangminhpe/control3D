@@ -7,15 +7,344 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Model {
-  id               String       @id @default(uuid())
+model Admin {
+  id                  String              @id @default(uuid())
+  email               String              @unique
+  passwordHash        String
+  role                AdminRole           @default(map_manager)
+  permissions         String[]            @default([])
+  isActive            Boolean             @default(true)
+  lastLoginAt         DateTime?
+  sessions            AuthSession[]
+  createdMaps         GameMap[]           @relation("MapCreator")
+  createdCharacters   Character[]         @relation("CharacterCreator")
+  auditLogs           AuditLog[]
+  securityLogs        SecurityLog[]
+  deletedChatMessages ChatMessage[]       @relation("ChatMessageDeletedBy")
+  moderationLogs      ChatModerationLog[] @relation("ChatModerationAdmin")
+  issuedMutes         UserMute[]          @relation("UserMuteAdmin")
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+}
+
+model User {
+  id                String              @id @default(uuid())
+  email             String              @unique
+  username          String              @unique
+  displayName       String
+  passwordHash      String
+  status            UserStatus          @default(active)
+  lastLoginAt       DateTime?
+  sessions          AuthSession[]
+  points            UserPoint?
+  characters        UserCharacter[]
+  gameSessions      GameSession[]
+  activePlayers     ActivePlayer[]
+  pointTransactions PointTransaction[]
+  chatMessages      ChatMessage[]
+  moderationTargets ChatModerationLog[] @relation("ChatModerationTarget")
+  mutes             UserMute[]
+  securityLogs      SecurityLog[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+}
+
+model AuthSession {
+  id                 String          @id @default(uuid())
+  subjectType        AuthSubjectType
+  adminId            String?
+  userId             String?
+  refreshTokenHash   String          @unique
+  refreshTokenFamily String
+  userAgent          String?
+  ipAddress          String?
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  rotatedAt          DateTime?
+  admin              Admin?          @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  user               User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([adminId])
+  @@index([userId])
+  @@index([refreshTokenFamily])
+  @@index([expiresAt])
+}
+
+model GameMap {
+  id               String              @id @default(uuid())
   name             String
-  description      String?      @db.Text
+  slug             String              @unique
+  description      String?             @db.Text
+  status           MapStatus           @default(draft)
+  mapModelUrl      String
+  storyGraph       Json?
+  placedObjects    Json                @default("[]")
+  zombieSpawns     Json                @default("[]")
+  playerSpawn      Json
+  robotSpawn       Json?
+  rules            Json?
+  maxPlayers       Int                 @default(50)
+  createdByAdminId String
+  createdByAdmin   Admin               @relation("MapCreator", fields: [createdByAdminId], references: [id])
+  characters       MapCharacter[]
+  sessions         GameSession[]
+  activePlayers    ActivePlayer[]
+  pointTransactions PointTransaction[]
+  chatMessages     ChatMessage[]
+  moderationLogs   ChatModerationLog[]
+  mutes            UserMute[]
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([createdByAdminId])
+}
+
+model Character {
+  id                String          @id @default(uuid())
+  name              String
+  description       String?         @db.Text
+  modelId           String?
+  model             Model?          @relation("CharacterModel", fields: [modelId], references: [id], onDelete: SetNull)
+  fileUrl           String
+  format            String?
+  animationManifest Json?
+  baseStats         Json?
+  isActive          Boolean         @default(true)
+  createdByAdminId  String
+  createdByAdmin    Admin           @relation("CharacterCreator", fields: [createdByAdminId], references: [id])
+  maps              MapCharacter[]
+  owners            UserCharacter[]
+  gameSessions      GameSession[]
+  activePlayers     ActivePlayer[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([modelId])
+  @@index([isActive])
+}
+
+model MapCharacter {
+  id              String           @id @default(uuid())
+  mapId           String
+  characterId     String
+  role            MapCharacterRole @default(playable)
+  displayLabel    String?
+  isDefault       Boolean          @default(false)
+  pointPrice      Int              @default(0)
+  spawnPosition   Json?
+  previewPosition Json?
+  storyEnabled    Boolean          @default(false)
+  sortOrder       Int              @default(0)
+  map             GameMap          @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  character       Character        @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([mapId, characterId])
+  @@index([mapId, isDefault])
+  @@index([mapId, role])
+}
+
+model UserCharacter {
+  id          String    @id @default(uuid())
+  userId      String
+  characterId String
+  source      String    @default("purchase")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  purchasedAt DateTime  @default(now())
+
+  @@unique([userId, characterId])
+  @@index([characterId])
+}
+
+model UserPoint {
+  userId    String   @id
+  balance   Int      @default(0)
+  lifetime  Int      @default(0)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+}
+
+model PointTransaction {
+  id           String               @id @default(uuid())
+  userId       String
+  mapId        String?
+  sessionId    String?
+  type         PointTransactionType
+  amount       Int
+  balanceAfter Int
+  metadata     Json?
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  map          GameMap?             @relation(fields: [mapId], references: [id], onDelete: SetNull)
+  session      GameSession?         @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+
+  @@index([userId, createdAt])
+  @@index([mapId, createdAt])
+  @@index([sessionId])
+}
+
+model GameSession {
+  id                String             @id @default(uuid())
+  mapId             String
+  userId            String
+  displayName       String
+  characterId       String
+  status            GameSessionStatus  @default(active)
+  ipAddress         String?
+  userAgent         String?
+  map               GameMap            @relation(fields: [mapId], references: [id])
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character         Character          @relation(fields: [characterId], references: [id])
+  activePlayer      ActivePlayer?
+  pointTransactions PointTransaction[]
+  chatMessages      ChatMessage[]
+  joinedAt          DateTime           @default(now())
+  leftAt            DateTime?
+  lastSeenAt        DateTime           @default(now())
+
+  @@index([mapId, status])
+  @@index([userId, joinedAt])
+  @@index([characterId])
+}
+
+model ActivePlayer {
+  id            String    @id @default(uuid())
+  sessionId     String    @unique
+  mapId         String
+  userId        String
+  characterId   String
+  socketId      String?
+  x             Float     @default(0)
+  y             Float     @default(0)
+  z             Float     @default(0)
+  hp            Int       @default(100)
+  pointSnapshot Int       @default(0)
+  actionState   String    @default("idle")
+  session       GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  map           GameMap     @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character     Character   @relation(fields: [characterId], references: [id])
+  lastActionAt  DateTime?
+  lastSeenAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([mapId])
+  @@index([userId])
+  @@index([characterId])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  adminId      String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  ipAddress    String?
+  admin        Admin?   @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([resourceType, resourceId])
+  @@index([adminId])
+}
+
+model SecurityLog {
+  id        String           @id @default(uuid())
+  userId    String?
+  adminId   String?
+  severity  SecuritySeverity @default(info)
+  eventType String
+  message   String
+  metadata  Json?
+  ipAddress String?
+  user      User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  admin     Admin?           @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  createdAt DateTime         @default(now())
+
+  @@index([eventType, createdAt])
+  @@index([userId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+model ChatMessage {
+  id               String      @id @default(uuid())
+  mapId            String
+  sessionId        String?
+  userId           String
+  displayName      String
+  channel          ChatChannel @default(map)
+  body             String      @db.Text
+  bodyPreview      String?
+  metadata         Json?
+  isDeleted        Boolean     @default(false)
+  deletedByAdminId String?
+  deletedAt        DateTime?
+  map              GameMap     @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  session          GameSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deletedByAdmin   Admin?      @relation("ChatMessageDeletedBy", fields: [deletedByAdminId], references: [id], onDelete: SetNull)
+  moderationLogs   ChatModerationLog[]
+  createdAt        DateTime    @default(now())
+
+  @@index([mapId, createdAt])
+  @@index([userId, createdAt])
+  @@index([sessionId])
+}
+
+model ChatModerationLog {
+  id           String               @id @default(uuid())
+  messageId    String?
+  mapId        String?
+  targetUserId String?
+  adminId      String?
+  action       ChatModerationAction
+  reason       String?
+  metadata     Json?
+  message      ChatMessage?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  map          GameMap?             @relation(fields: [mapId], references: [id], onDelete: SetNull)
+  targetUser   User?                @relation("ChatModerationTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  admin        Admin?               @relation("ChatModerationAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+
+  @@index([targetUserId, createdAt])
+  @@index([mapId, createdAt])
+  @@index([messageId])
+}
+
+model UserMute {
+  id             String    @id @default(uuid())
+  userId         String
+  mapId          String?
+  mutedByAdminId String?
+  reason         String?
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  map            GameMap?  @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  mutedByAdmin   Admin?    @relation("UserMuteAdmin", fields: [mutedByAdminId], references: [id], onDelete: SetNull)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId, mapId])
+  @@index([expiresAt])
+}
+
+model Model {
+  id               String         @id @default(uuid())
+  name             String
+  description      String?        @db.Text
   tags             String[]
-  category         Category     @default(other)
+  category         Category       @default(other)
   elementTypeId    String?
-  elementType      ElementType? @relation(fields: [elementTypeId], references: [id], onDelete: SetNull)
-  license          License      @default(CC0)
+  elementType      ElementType?   @relation(fields: [elementTypeId], references: [id], onDelete: SetNull)
+  license          License        @default(CC0)
   originalFilename String
   format           Format
   fileUrl          String
@@ -24,18 +353,19 @@ model Model {
   polygonCount     Int?
   vertexCount      Int?
   materialCount    Int?
-  hasAnimations    Boolean      @default(false)
-  hasTextures      Boolean      @default(false)
+  hasAnimations    Boolean        @default(false)
+  hasTextures      Boolean        @default(false)
   customProps      Json?
   boundingBox      Json?
-  position         Float[]      @default([0, 0, 0])
-  rotation         Float[]      @default([0, 0, 0])
-  scale            Float[]      @default([1, 1, 1])
-  downloadCount    Int          @default(0)
-  viewCount        Int          @default(0)
+  position         Float[]        @default([0, 0, 0])
+  rotation         Float[]        @default([0, 0, 0])
+  scale            Float[]        @default([1, 1, 1])
+  downloadCount    Int            @default(0)
+  viewCount        Int            @default(0)
   versions         ModelVersion[]
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  gameplayCharacters Character[]  @relation("CharacterModel")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 }
 
 model ElementType {
@@ -48,10 +378,9 @@ model ElementType {
   sortOrder   Int      @default(0)
   isActive    Boolean  @default(true)
   schema      Json?
+  models      Model[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
-  models      Model[]
 }
 
 model ModelVersion {
@@ -62,6 +391,69 @@ model ModelVersion {
   fileUrl       String
   changeNote    String?
   createdAt     DateTime @default(now())
+}
+
+enum AdminRole {
+  super_admin
+  map_manager
+  moderator
+  analyst
+}
+
+enum AuthSubjectType {
+  admin
+  user
+}
+
+enum UserStatus {
+  active
+  disabled
+  banned
+}
+
+enum MapStatus {
+  draft
+  published
+  archived
+}
+
+enum MapCharacterRole {
+  playable
+  npc
+  story_actor
+  boss
+}
+
+enum PointTransactionType {
+  monster_kill
+  character_purchase
+  admin_adjustment
+  refund
+}
+
+enum GameSessionStatus {
+  active
+  ended
+  crashed
+}
+
+enum ChatChannel {
+  map
+  party
+  system
+}
+
+enum ChatModerationAction {
+  report
+  mute
+  delete_message
+  warn
+}
+
+enum SecuritySeverity {
+  info
+  warning
+  critical
 }
 
 enum Category {

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
@@ -11,9 +12,19 @@ const navItems = [
     match: (pathname: string) => pathname === "/",
   },
   {
+    href: "/lobby" as const,
+    label: "Lobby",
+    match: (pathname: string) => pathname.startsWith("/lobby"),
+  },
+  {
     href: "/models" as const,
     label: "Characters",
     match: (pathname: string) => pathname.startsWith("/models"),
+  },
+  {
+    href: "/admin/maps" as const,
+    label: "Admin",
+    match: (pathname: string) => pathname.startsWith("/admin"),
   },
 ];
 
@@ -32,7 +43,7 @@ export function AppNavbar() {
           <Link
             aria-current={item.match(pathname) ? "page" : undefined}
             className={`top-nav-link${item.match(pathname) ? " active" : ""}`}
-            href={item.href}
+            href={item.href as Route}
             key={item.href}
           >
             {item.label}

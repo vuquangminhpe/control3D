@@ -1,20 +1,39 @@
 "use client";
 
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useLoader } from "@react-three/fiber";
 import { Physics, RigidBody } from "@react-three/rapier";
 import { OrbitControls, Html, Environment, Sky, Line, useGLTF } from "@react-three/drei";
 import { FBXLoader } from "three-stdlib";
 import * as THREE from "three";
 import { useShallow } from "zustand/react/shallow";
-import { getEnemyRuntimePosition, useGameStore, type ArrowProjectileState } from "@/store/gameStore";
-import { Player } from "./Player";
+import {
+  getEnemyRuntimePosition,
+  setEnemyRuntimePosition,
+  useGameStore,
+  type ArrowProjectileState,
+} from "@/store/gameStore";
+import { AnimationActionPlayer, Player } from "./Player";
 import { Terrain } from "./Terrain";
 import { FloatingDamage, prewarmDamageTextures } from "./FloatingDamage";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { CharacterEnemyBot, NpcBot } from "./EnemyBot";
 import { preload3DModel } from "@/hooks/use3DModel";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
+
+export type RemotePresencePlayer = {
+  id: string;
+  displayName: string;
+  seq: number;
+  serverTimeMs: number;
+  position: [number, number, number];
+  velocity: [number, number, number];
+  characterName: string | null;
+  characterFileUrl: string | null;
+  actionState: string;
+  activeActionName: string | null;
+  activeActionUrl: string | null;
+};
 
 // Camera controller that tracks the player smoothly
 function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject<any> }) {
@@ -126,15 +145,25 @@ function snapRuntimeToTerrain(terrain: THREE.Object3D) {
     const activeLevel = {
       ...state.activeLevel,
       playerSpawn: snapEntity(state.activeLevel.playerSpawn, 1.5 * scaleRatio),
+      robotSpawn: snapEntity(state.activeLevel.robotSpawn, 0),
       placedObjects: state.activeLevel.placedObjects.map((object) => ({
         ...object,
         position: snapObject(object.position),
       })),
     };
+    const snappedEnemies = state.enemies.map((enemy) => ({
+      ...enemy,
+      position: snapEntity(enemy.position, 0),
+    }));
+    snappedEnemies.forEach((enemy) => {
+      setEnemyRuntimePosition(enemy.id, [...enemy.position]);
+    });
 
     return {
       activeLevel,
       playerPosition: [...activeLevel.playerSpawn],
+      robotPosition: [...activeLevel.robotSpawn],
+      enemies: snappedEnemies,
     };
   });
 }
@@ -432,6 +461,128 @@ function ArrowProjectileLayer({ terrainScene }: { terrainScene: THREE.Object3D |
   );
 }
 
+function RemotePlayerAvatar({
+  player,
+  mapScaleRatio,
+}: {
+  player: RemotePresencePlayer;
+  mapScaleRatio: number;
+}) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const targetPositionRef = useRef(new THREE.Vector3(...player.position));
+  const currentPositionRef = useRef(new THREE.Vector3(...player.position));
+  const targetYawRef = useRef(0);
+  const initialPosition = useMemo(
+    () => [...player.position] as [number, number, number],
+    [player.id],
+  );
+  const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+
+  useEffect(() => {
+    const packetAgeSeconds = THREE.MathUtils.clamp(
+      (Date.now() - (player.serverTimeMs || Date.now())) / 1000,
+      0,
+      0.18,
+    );
+    targetPositionRef.current
+      .fromArray(player.position)
+      .addScaledVector(
+        new THREE.Vector3(...player.velocity),
+        packetAgeSeconds,
+      );
+    const horizontalSpeed = Math.hypot(player.velocity[0], player.velocity[2]);
+    if (horizontalSpeed > 0.08) {
+      targetYawRef.current = Math.atan2(player.velocity[0], player.velocity[2]);
+    }
+  }, [player.position, player.velocity]);
+
+  useEffect(() => {
+    if (!modelScene) return;
+    const mixer = new THREE.AnimationMixer(modelScene);
+    mixerRef.current = mixer;
+    return () => {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(modelScene);
+      mixerRef.current = null;
+    };
+  }, [modelScene]);
+
+  useFrame((_, delta) => {
+    mixerRef.current?.update(delta);
+    const group = groupRef.current;
+    if (!group) return;
+
+    const lerpAlpha = 1 - Math.exp(-Math.max(delta, 0) * 12);
+    currentPositionRef.current.lerp(targetPositionRef.current, lerpAlpha);
+    group.position.copy(currentPositionRef.current);
+
+    const yawDelta = THREE.MathUtils.euclideanModulo(
+      targetYawRef.current - group.rotation.y + Math.PI,
+      Math.PI * 2,
+    ) - Math.PI;
+    group.rotation.y += yawDelta * (1 - Math.exp(-Math.max(delta, 0) * 10));
+  });
+
+  return (
+    <group ref={groupRef} position={initialPosition}>
+      <Suspense fallback={null}>
+        {player.characterFileUrl ? (
+          <ModelLoader
+            debugLabel={`remote-player:${player.displayName}`}
+            fitHeight={1.7 * mapScaleRatio}
+            groundToY={0}
+            src={player.characterFileUrl}
+            onSceneReady={setModelScene}
+          />
+        ) : (
+          <mesh castShadow position={[0, 0.85 * mapScaleRatio, 0]}>
+            <capsuleGeometry args={[0.32 * mapScaleRatio, 1.2 * mapScaleRatio, 6, 12]} />
+            <meshStandardMaterial color="#7dd3fc" roughness={0.45} />
+          </mesh>
+        )}
+      </Suspense>
+      {modelScene && player.activeActionUrl ? (
+        <Suspense fallback={null}>
+          <AnimationActionPlayer
+            key={player.activeActionUrl}
+            animationUrl={player.activeActionUrl}
+            mixerRef={mixerRef}
+          />
+        </Suspense>
+      ) : null}
+      <Html center position={[0, 2.25 * mapScaleRatio, 0]}>
+        <span className="remote-player-label">
+          {player.displayName}
+          {player.actionState && player.actionState !== "idle" ? (
+            <em>{player.actionState}</em>
+          ) : null}
+        </span>
+      </Html>
+    </group>
+  );
+}
+
+function RemotePlayerLayer({
+  players,
+  mapScaleRatio,
+}: {
+  players: RemotePresencePlayer[];
+  mapScaleRatio: number;
+}) {
+  return (
+    <>
+      {players.map((player) => (
+        <RemotePlayerAvatar
+          key={player.id}
+          player={player}
+          mapScaleRatio={mapScaleRatio}
+        />
+      ))}
+    </>
+  );
+}
+
 class PreloadErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
@@ -468,7 +619,13 @@ function AnimationAssetPreloader({ url }: { url: string }) {
   }
 }
 
-export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
+export function GameCanvas({
+  playerActions = [],
+  remotePlayers = [],
+}: {
+  playerActions?: any[];
+  remotePlayers?: RemotePresencePlayer[];
+}) {
   const controlsRef = useRef<any>(null);
   const [terrainScene, setTerrainScene] = useState<THREE.Object3D | null>(null);
   const [groundReady, setGroundReady] = useState(false);
@@ -509,8 +666,12 @@ export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
 
   useEffect(() => {
     if (!terrainScene || !hasMap) return;
-    snapRuntimeToTerrain(terrainScene);
-    setGroundReady(true);
+    const frame = window.requestAnimationFrame(() => {
+      snapRuntimeToTerrain(terrainScene);
+      setGroundReady(true);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [activeLevelId, hasMap, terrainScene, worldVersion]);
 
   return (
@@ -580,6 +741,7 @@ export function GameCanvas({ playerActions = [] }: { playerActions?: any[] }) {
 
           <BowTrajectoryLayer />
           <ArrowProjectileLayer terrainScene={terrainScene} />
+          <RemotePlayerLayer players={remotePlayers} mapScaleRatio={mapScaleRatio} />
 
           {/* Floating Damage Popup Numbers */}
           <FloatingDamageLayer />

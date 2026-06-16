@@ -7,6 +7,6 @@ export default defineConfig({
     path: "./prisma/migrations",
   },
   datasource: {
-    url: "file:.D:/control3D/apps/web/data/control3d.sqlite",
+    url: env("DATABASE_URL"),
   },
 });

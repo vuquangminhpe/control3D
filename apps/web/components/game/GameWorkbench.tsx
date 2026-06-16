@@ -2,6 +2,7 @@
 
 import {
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -26,13 +27,16 @@ import { log3DDebug } from "@/lib/3d/debug";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 import { StoryGraphPanel } from "./StoryGraphPanel";
 import { DialogueSystem } from "./DialogueSystem";
-import { GameCanvas } from "./GameCanvas";
+import { GameCanvas, type RemotePresencePlayer } from "./GameCanvas";
+import { GameChatPanel, type GameChatMessage } from "./GameChatPanel";
+import { useRealtimeGameRoom } from "./useRealtimeGameRoom";
 import { HUD } from "./HUD";
 import {
   useGameStore,
   weaponCatalog,
   type GameLevel,
   type LevelCharacter,
+  type MapCharacter,
   type PlacedObject,
   type StoryEdge,
   type StoryGraph,
@@ -300,6 +304,7 @@ function buildEditableLevel(source?: GameLevel) {
     robotSpawn: formatVector(source?.robotSpawn ?? [0, 0, 0]),
     robotStory: source?.robotStory ?? "",
     storyGraph: normalizeStoryGraph(source?.storyGraph),
+    mapCharacters: source?.mapCharacters ?? [],
     placedObjects: normalizePlacedObjects(source?.placedObjects ?? []),
     zombieSpawns: source?.zombieSpawns ?? [],
   };
@@ -2780,9 +2785,21 @@ export function GameWorkbench() {
   const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
   const activeLevel = useGameStore((state) => state.activeLevel);
+  const playerPosition = useGameStore((state) => state.playerPosition);
+  const playerVelocity = useGameStore((state) => state.playerVelocity);
+  const playerActionState = useGameStore((state) => state.playerActionState);
+  const activeGameplayActionUrl = useGameStore((state) => state.activeGameplayActionUrl);
+  const activeGameplayActionName = useGameStore((state) => state.activeGameplayActionName);
 
   const [draft, setDraft] = useState<EditableLevelDraft | null>(null);
   const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
+  const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([]);
+  const [chatDisplayName, setChatDisplayName] = useState("Player");
+  const [isChatConnected, setIsChatConnected] = useState(false);
+  const [remotePlayers, setRemotePlayers] = useState<RemotePresencePlayer[]>([]);
+  const allowRealtimeFallback =
+    process.env.NODE_ENV !== "production" &&
+    process.env.NEXT_PUBLIC_CONTROL3D_ALLOW_REALTIME_FALLBACK !== "false";
 
   const selectedPlayerCharacter = draft?.playerCharacter;
   const selectedPlayerAsset = selectedPlayerCharacter
@@ -2792,6 +2809,40 @@ export function GameWorkbench() {
     () => getCharacterActionsFromAsset(selectedPlayerAsset),
     [selectedPlayerAsset],
   );
+  const realtimeFallbackAction = useMemo(() => {
+    if (activeGameplayActionUrl) {
+      return {
+        fileUrl: activeGameplayActionUrl,
+        name: activeGameplayActionName ?? playerActionState,
+      };
+    }
+    return (
+      selectedPlayerActions.find((action) => action.enabled && action.trigger === "idle") ??
+      null
+    );
+  }, [
+    activeGameplayActionName,
+    activeGameplayActionUrl,
+    playerActionState,
+    selectedPlayerActions,
+  ]);
+  const playerPositionRef = useRef(playerPosition);
+
+  useEffect(() => {
+    playerPositionRef.current = playerPosition;
+  }, [playerPosition]);
+
+  const realtimeRoom = useRealtimeGameRoom({
+    active: activeTab === "play",
+    mapId: activeLevel?.id,
+    playerPosition,
+    playerVelocity,
+    characterName: activeLevel?.playerCharacter?.name ?? null,
+    characterFileUrl: activeLevel?.playerCharacter?.fileUrl ?? null,
+    actionState: playerActionState,
+    activeActionName: realtimeFallbackAction?.name ?? playerActionState,
+    activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
+  });
 
   const setActiveGameplayAction = useGameStore((state) => state.setActiveGameplayAction);
 
@@ -2919,6 +2970,207 @@ export function GameWorkbench() {
   }, [loadSavedLevels, loadWeaponLoadouts]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadIdentity() {
+      const endpoints = ["/api/auth/me", "/api/admin/auth/me"];
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, { cache: "no-store" });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || !payload?.success) continue;
+
+          const user = payload.data?.user;
+          const admin = payload.data?.admin;
+          const nextName =
+            user?.displayName ||
+            user?.username ||
+            (admin?.email ? `Admin ${String(admin.email).split("@")[0]}` : "");
+          if (!cancelled && nextName) {
+            setChatDisplayName(String(nextName));
+            setIsChatConnected(true);
+          }
+          return;
+        } catch {
+          // Try the next auth context.
+        }
+      }
+
+      if (!cancelled) {
+        setIsChatConnected(false);
+      }
+    }
+
+    void loadIdentity();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadChatMessages = useCallback(async (mapId: string) => {
+    const response = await fetch(
+      `/api/maps/${encodeURIComponent(mapId)}/chat/history?limit=60`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Unable to load chat");
+    }
+    setChatMessages(payload.data?.messages ?? []);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !allowRealtimeFallback ||
+      realtimeRoom.connected ||
+      activeTab !== "play" ||
+      !activeLevel?.id ||
+      activeLevel.id === "empty-map"
+    ) {
+      setChatMessages([]);
+      return;
+    }
+
+    let cancelled = false;
+    const mapId = activeLevel.id;
+    const tick = async () => {
+      try {
+        if (!cancelled) await loadChatMessages(mapId);
+      } catch {
+        // Chat should not break gameplay while editing local/draft maps.
+      }
+    };
+
+    void tick();
+    const interval = window.setInterval(() => {
+      void tick();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    activeLevel?.id,
+    activeTab,
+    allowRealtimeFallback,
+    loadChatMessages,
+    realtimeRoom.connected,
+  ]);
+
+  const sendChatMessage = useCallback(
+    async (body: string) => {
+      if (!activeLevel?.id || activeLevel.id === "empty-map") {
+        throw new Error("Select a saved map before chatting.");
+      }
+      const response = await fetch(
+        `/api/maps/${encodeURIComponent(activeLevel.id)}/chat/messages`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ channel: "map", body }),
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error ?? "Unable to send chat message");
+      }
+      await loadChatMessages(activeLevel.id);
+    },
+    [activeLevel?.id, loadChatMessages],
+  );
+
+  const sendRealtimeRequiredMessage = useCallback(async () => {
+    throw new Error("Realtime room is not connected.");
+  }, []);
+
+  useEffect(() => {
+    if (
+      !allowRealtimeFallback ||
+      realtimeRoom.connected ||
+      activeTab !== "play" ||
+      !activeLevel?.id ||
+      activeLevel.id === "empty-map"
+    ) {
+      setRemotePlayers([]);
+      return;
+    }
+
+    let cancelled = false;
+    const mapId = activeLevel.id;
+    const heartbeatBody = () => ({
+      position: playerPositionRef.current,
+      velocity: playerVelocity,
+      characterName: activeLevel.playerCharacter?.name ?? null,
+      characterFileUrl: activeLevel.playerCharacter?.fileUrl ?? null,
+      actionState: playerActionState,
+      activeActionName: realtimeFallbackAction?.name ?? playerActionState,
+      activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
+    });
+
+    const tick = async () => {
+      try {
+        await fetch(`/api/maps/${encodeURIComponent(mapId)}/presence`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(heartbeatBody()),
+        });
+        const response = await fetch(`/api/maps/${encodeURIComponent(mapId)}/presence`, {
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => null);
+        if (!cancelled && response.ok && payload?.success) {
+          setRemotePlayers(payload.data?.players ?? []);
+        }
+      } catch {
+        if (!cancelled) setRemotePlayers([]);
+      }
+    };
+
+    void tick();
+    const interval = window.setInterval(() => {
+      void tick();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    activeLevel?.id,
+    activeLevel?.playerCharacter?.fileUrl,
+    activeLevel?.playerCharacter?.name,
+    activeTab,
+    allowRealtimeFallback,
+    playerActionState,
+    playerVelocity,
+    realtimeFallbackAction?.fileUrl,
+    realtimeFallbackAction?.name,
+    realtimeRoom.connected,
+  ]);
+
+  const effectiveChatMessages = realtimeRoom.connected
+    ? realtimeRoom.messages
+    : allowRealtimeFallback
+      ? chatMessages
+      : [];
+  const effectiveRemotePlayers = realtimeRoom.connected
+    ? realtimeRoom.remotePlayers
+    : allowRealtimeFallback
+      ? remotePlayers
+      : [];
+  const effectiveChatConnected =
+    realtimeRoom.connected || (allowRealtimeFallback && isChatConnected);
+  const effectiveChatDisplayName = realtimeRoom.connected
+    ? realtimeRoom.selfDisplayName
+    : chatDisplayName;
+  const effectiveSendChatMessage = realtimeRoom.connected
+    ? realtimeRoom.sendMessage
+    : allowRealtimeFallback
+      ? sendChatMessage
+      : sendRealtimeRequiredMessage;
+
+  useEffect(() => {
     if (activeLevel) {
       setDraft(buildEditableLevel(activeLevel));
     } else {
@@ -2960,6 +3212,7 @@ export function GameWorkbench() {
       robotStory: draft.robotStory.trim(),
       storyGraph: draft.storyGraph,
       zombieSpawns: draft.zombieSpawns,
+      mapCharacters: draft.mapCharacters,
       placedObjects: draft.placedObjects,
     });
     if (saved) {
@@ -2987,6 +3240,7 @@ export function GameWorkbench() {
       robotSpawn: [0, 0, 0],
       robotStory: "",
       storyGraph: EMPTY_STORY_GRAPH,
+      mapCharacters: [],
       placedObjects: [],
       zombieSpawns: [],
     });
@@ -3032,13 +3286,23 @@ export function GameWorkbench() {
 
       {activeTab === "play" && (
         <div style={{ position: "relative", width: "100%", height: "calc(100vh - 50px)" }}>
-          <GameCanvas playerActions={selectedPlayerActions} />
+          <GameCanvas
+            playerActions={selectedPlayerActions}
+            remotePlayers={effectiveRemotePlayers}
+          />
           <HUD />
           <DialogueSystem />
           <ManualActionConfigPanel
             actions={selectedPlayerActions}
             activeActionId={activeGameplayActionId}
             onTriggerAction={triggerGameplayAction}
+          />
+          <GameChatPanel
+            connected={effectiveChatConnected}
+            displayName={effectiveChatDisplayName}
+            messages={effectiveChatMessages}
+            onSendMessage={effectiveSendChatMessage}
+            storageKey={`control3d:game-chat-panel:${activeLevel?.id ?? "local"}`}
           />
         </div>
       )}
@@ -3064,6 +3328,7 @@ export function GameWorkbench() {
         <div style={{ height: "calc(100vh - 50px)" }}>
           <StoryGraphPanel
             assetLibrary={assetLibrary}
+            mapCharacters={draft.mapCharacters as MapCharacter[]}
             graph={draft.storyGraph}
             onChange={(storyGraph) =>
               setDraft((current) =>

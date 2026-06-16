@@ -13,7 +13,7 @@ coverage/
 apps/web/public/uploads/*
 !apps/web/public/uploads/.gitkeep
 !apps/web/public/uploads/models/.gitkeep
-
+PUBLIC_ONLINE_GAME_PLAN.md
 # SQLite
 *.db
 *.sqlite

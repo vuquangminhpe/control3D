@@ -80,6 +80,10 @@ export type StoryNode = {
   modelId?: string | null;
   modelName?: string | null;
   fileUrl?: string | null;
+  mapCharacterId?: string | null;
+  characterId?: string | null;
+  displayLabel?: string | null;
+  previewPosition?: [number, number, number] | null;
   action?: string | null;
   characterActionId?: string | null;
   characterActionName?: string | null;
@@ -121,9 +125,31 @@ export type LevelCharacter = {
   format?: string;
 };
 
+export type MapCharacterRole = "playable" | "npc" | "story_actor" | "boss";
+
+export type MapCharacter = {
+  id: string;
+  characterId: string;
+  modelId: string;
+  name: string;
+  fileUrl: string;
+  format?: string;
+  role: MapCharacterRole;
+  displayLabel: string | null;
+  isDefault: boolean;
+  pointPrice: number;
+  spawnPosition: [number, number, number] | null;
+  previewPosition: [number, number, number] | null;
+  storyEnabled: boolean;
+  sortOrder: number;
+};
+
 export type GameLevel = {
   id: string;
   name: string;
+  slug?: string;
+  description?: string | null;
+  status?: "draft" | "published" | "archived";
   mapModelUrl: string;
   playerCharacter?: LevelCharacter | null;
   playerSpawn: [number, number, number];
@@ -131,7 +157,11 @@ export type GameLevel = {
   robotStory: string;
   storyGraph: StoryGraph;
   zombieSpawns: ZombieSpawn[];
+  mapCharacters: MapCharacter[];
   placedObjects: PlacedObject[];
+  maxPlayers?: number;
+  publishedAt?: string | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -324,13 +354,47 @@ const DEFAULT_LEVEL: GameLevel = {
   robotStory: "",
   storyGraph: EMPTY_STORY_GRAPH,
   zombieSpawns: [],
+  mapCharacters: [],
   placedObjects: [],
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
 };
 
 function createEnemiesFromLevel(level: GameLevel): EnemyState[] {
-  const enemies = level.zombieSpawns.map((spawn, index) => {
+  const configuredSpawns =
+    level.zombieSpawns.length > 0
+      ? level.zombieSpawns
+      : ([
+          {
+            id: "fallback-enemy-1",
+            type: "zombie_low",
+            position: [
+              level.playerSpawn[0] + 4,
+              level.playerSpawn[1],
+              level.playerSpawn[2] + 5,
+            ],
+          },
+          {
+            id: "fallback-enemy-2",
+            type: "zombie_low",
+            position: [
+              level.playerSpawn[0] - 5,
+              level.playerSpawn[1],
+              level.playerSpawn[2] + 7,
+            ],
+          },
+          {
+            id: "fallback-enemy-3",
+            type: "zombie_fantasy",
+            position: [
+              level.playerSpawn[0] + 7,
+              level.playerSpawn[1],
+              level.playerSpawn[2] - 5,
+            ],
+          },
+        ] satisfies ZombieSpawn[]);
+
+  const enemies = configuredSpawns.map((spawn, index) => {
     const stats = getEnemyStats(spawn.type);
     return {
       id: spawn.id || `e${index + 1}`,
@@ -377,6 +441,7 @@ function normalizeLevel(level: GameLevel): GameLevel {
     ...level,
     storyGraph: normalizeStoryGraph(level.storyGraph),
     zombieSpawns: level.zombieSpawns ?? [],
+    mapCharacters: level.mapCharacters ?? [],
     placedObjects: level.placedObjects ?? [],
   };
 }
@@ -441,6 +506,7 @@ interface GameState {
   mapScaleRatio: number;
   activeGameplayActionUrl: string | null;
   activeGameplayActionName: string | null;
+  playerActionState: string;
 
   // Floating Damage Numbers
   floatingDamages: FloatingDamage[];
@@ -449,6 +515,7 @@ interface GameState {
   startGame: () => void;
   setMapScaleRatio: (ratio: number) => void;
   setActiveGameplayAction: (url: string | null, name: string | null) => void;
+  setPlayerActionState: (state: string) => void;
   updatePlayerPosition: (pos: [number, number, number]) => void;
   updatePlayerVelocity: (vel: [number, number, number]) => void;
   setPlayerTargetMove: (target: [number, number, number] | null) => void;
@@ -790,6 +857,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   mapScaleRatio: 1.0,
   activeGameplayActionUrl: null,
   activeGameplayActionName: null,
+  playerActionState: "idle",
   
   floatingDamages: [],
 
@@ -802,6 +870,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     activeGameplayActionName: name,
   }),
 
+  setPlayerActionState: (actionState) => set((state) => (
+    state.playerActionState === actionState ? state : { playerActionState: actionState }
+  )),
+
   startGame: () => {
     set((state) => ({
       status: "playing",
@@ -813,6 +885,9 @@ export const useGameStore = create<GameState>((set, get) => ({
       playerMaxHp: 100,
       playerPosition: [...state.activeLevel.playerSpawn],
       playerVelocity: [0, 0, 0],
+      playerActionState: "idle",
+      activeGameplayActionUrl: null,
+      activeGameplayActionName: null,
       playerTargetMove: null,
       isPlayerAttacking: false,
       comboCount: 0,
@@ -1061,6 +1136,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((current) => ({
       activeLevel,
       playerPosition: [...activeLevel.playerSpawn],
+      playerVelocity: [0, 0, 0],
+      playerActionState: "idle",
+      activeGameplayActionUrl: null,
+      activeGameplayActionName: null,
       robotPosition: [...activeLevel.robotSpawn],
       floatingDamages: [],
       bowAim: EMPTY_BOW_AIM,

@@ -1,0 +1,12 @@
+{
+  "name": "realtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.mjs",
+    "start": "node src/server.mjs",
+    "smoke": "node scripts/smoke-room.mjs",
+    "typecheck": "node --check src/server.mjs && node --check scripts/smoke-room.mjs"
+  }
+}

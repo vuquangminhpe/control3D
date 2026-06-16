@@ -1,0 +1,23 @@
+{
+  "name": "@control3d/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas/auth": "./src/schemas/auth.ts",
+    "./schemas/maps": "./src/schemas/maps.ts",
+    "./schemas/story-graph": "./src/schemas/story-graph.ts",
+    "./schemas/chat": "./src/schemas/chat.ts",
+    "./schemas/realtime": "./src/schemas/realtime.ts",
+    "./schemas/game-events": "./src/schemas/game-events.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

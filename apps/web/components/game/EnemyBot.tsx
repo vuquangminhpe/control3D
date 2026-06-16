@@ -6,6 +6,7 @@ import { useGLTF, Html } from "@react-three/drei";
 import { RigidBody, CapsuleCollider } from "@react-three/rapier";
 import * as THREE from "three";
 import { useGameStore, type EnemyState } from "@/store/gameStore";
+import { getRenderableBounds } from "@/components/3d/ModelLoader";
 
 // Helper to search and find proper animation clips
 function findClipByName(clips: THREE.AnimationClip[], keywords: string[]) {
@@ -43,8 +44,30 @@ function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
         child.receiveShadow = true;
       }
     });
+    clone.updateMatrixWorld(true);
+    const bounds = getRenderableBounds(clone, {
+      loader: "enemy-bot",
+      phase: "fit",
+      src: modelUrl,
+    });
+    if (!bounds.isEmpty()) {
+      const size = bounds.getSize(new THREE.Vector3());
+      const desiredHeight = (enemy.type === "zombie_fantasy" ? 2.3 : 1.8) * mapScaleRatio;
+      if (size.y > 0.0001) {
+        clone.scale.multiplyScalar(desiredHeight / size.y);
+      }
+      clone.updateMatrixWorld(true);
+      const fittedBounds = getRenderableBounds(clone, {
+        loader: "enemy-bot",
+        phase: "ground",
+        src: modelUrl,
+      });
+      if (!fittedBounds.isEmpty()) {
+        clone.position.y -= fittedBounds.min.y;
+      }
+    }
     return clone;
-  }, [scene]);
+  }, [enemy.type, mapScaleRatio, modelUrl, scene]);
 
   // Setup animations
   const clips = useMemo(() => {
@@ -109,7 +132,7 @@ function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
 
   return (
     <group ref={visualRef}>
-      <primitive object={clonedScene} scale={enemy.type === "zombie_fantasy" ? 1.0 : 0.85} />
+      <primitive object={clonedScene} />
     </group>
   );
 }
@@ -240,8 +263,30 @@ function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
         child.receiveShadow = true;
       }
     });
+    clone.updateMatrixWorld(true);
+    const bounds = getRenderableBounds(clone, {
+      loader: "npc-bot",
+      phase: "fit",
+      src: "/models/robot_tuan_tra_NPC.glb",
+    });
+    if (!bounds.isEmpty()) {
+      const size = bounds.getSize(new THREE.Vector3());
+      const desiredHeight = 1.85 * mapScaleRatio;
+      if (size.y > 0.0001) {
+        clone.scale.multiplyScalar(desiredHeight / size.y);
+      }
+      clone.updateMatrixWorld(true);
+      const fittedBounds = getRenderableBounds(clone, {
+        loader: "npc-bot",
+        phase: "ground",
+        src: "/models/robot_tuan_tra_NPC.glb",
+      });
+      if (!fittedBounds.isEmpty()) {
+        clone.position.y -= fittedBounds.min.y;
+      }
+    }
     return clone;
-  }, [scene]);
+  }, [mapScaleRatio, scene]);
 
   const modelRef = useRef<THREE.Group>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
@@ -271,7 +316,7 @@ function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
 
   return (
     <group ref={modelRef}>
-      <primitive object={clonedScene} scale={1.25 * mapScaleRatio} />
+      <primitive object={clonedScene} />
     </group>
   );
 }
@@ -311,4 +356,3 @@ export function NpcBot({ position, npcId }: { position: [number, number, number]
     </RigidBody>
   );
 }
-

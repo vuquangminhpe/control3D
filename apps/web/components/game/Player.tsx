@@ -116,7 +116,7 @@ function GltfAnimationActionPlayer({
   return clip ? <AnimationActionExecutor clip={clip} mixerRef={mixerRef} /> : null;
 }
 
-function AnimationActionPlayer({
+export function AnimationActionPlayer({
   animationUrl,
   mixerRef,
 }: {
@@ -266,6 +266,7 @@ export function Player({ playerActions = [] }: { playerActions?: any[] }) {
   const spawnArrow = useGameStore((state) => state.spawnArrow);
   const playerCharacter = useGameStore((state) => state.activeLevel.playerCharacter);
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+  const setPlayerActionState = useGameStore((state) => state.setPlayerActionState);
 
   // Local movement states
   const [keys, setKeys] = useState({ w: false, a: false, s: false, d: false, Shift: false });
@@ -308,6 +309,10 @@ export function Player({ playerActions = [] }: { playerActions?: any[] }) {
   // Speed configuration
   const speed = 7 * mapScaleRatio;
   const rotationSpeed = 10;
+
+  useEffect(() => {
+    setPlayerActionState(actionState);
+  }, [actionState, setPlayerActionState]);
 
   const playAnimation = useCallback((fileUrl: string | null, name: string | null, durationMs?: number) => {
     if (animationTimeoutRef.current !== null) {

@@ -3491,3 +3491,317 @@ body .workspace-topbar.collapsed .top-nav {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.auth-page {
+  position: relative;
+  display: grid;
+  width: 100%;
+  max-width: none;
+  min-height: calc(100vh - 56px);
+  place-items: center;
+  overflow: hidden;
+  padding: 44px 20px;
+  background: linear-gradient(135deg, #050813, #101827 58%, #06120f);
+  color: #f8fafc;
+}
+
+.auth-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 255, 196, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+  pointer-events: none;
+}
+
+.auth-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+.auth-card {
+  display: grid;
+  width: min(460px, calc(100vw - 40px));
+  gap: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(10, 15, 30, 0.88);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 28px 80px rgba(0, 0, 0, 0.46);
+  padding: 30px;
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.auth-card h1 {
+  margin: 0 0 6px;
+  color: #ffffff;
+  font-size: 30px;
+  letter-spacing: 0;
+}
+
+.auth-card .field {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+}
+
+.auth-card .field input {
+  border-color: rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.075);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.auth-card .field input:focus {
+  border-color: rgba(0, 255, 196, 0.5);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 255, 196, 0.11);
+}
+
+.auth-card .button {
+  width: 100%;
+  margin-top: 4px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #00ffc4, #38bdf8);
+  color: #04100d;
+  font-weight: 950;
+  box-shadow: 0 16px 34px rgba(0, 255, 196, 0.18);
+}
+
+.auth-eyebrow {
+  color: #00ffc4;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: 0.12em;
+}
+
+.auth-switch {
+  margin-top: 16px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 14px;
+  text-align: center;
+}
+
+.auth-switch a {
+  color: #8cf7d3;
+  font-weight: 900;
+}
+
+.grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.map-card {
+  display: grid;
+  align-content: space-between;
+  gap: 18px;
+  min-height: 260px;
+}
+
+.map-card h2 {
+  margin: 12px 0 8px;
+}
+
+.map-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.map-meta div {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.54);
+  padding: 12px;
+}
+
+.map-meta dt {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.map-meta dd {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 850;
+}
+
+.status-pill {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.status-pill.published {
+  border-color: rgba(32, 138, 103, 0.24);
+  background: rgba(32, 138, 103, 0.12);
+  color: var(--success);
+}
+
+.status-pill.draft {
+  border-color: rgba(90, 107, 255, 0.24);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.status-pill.archived {
+  border-color: rgba(201, 75, 99, 0.24);
+  background: rgba(201, 75, 99, 0.12);
+  color: var(--danger);
+}
+
+.empty-state {
+  display: grid;
+  gap: 8px;
+  padding: 28px;
+  text-align: center;
+}
+
+.admin-map-table {
+  display: grid;
+  gap: 0;
+  margin-top: 18px;
+  overflow-x: auto;
+}
+
+.admin-map-entry {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+
+.admin-map-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.5fr) 120px 110px minmax(320px, 1.4fr);
+  gap: 16px;
+  align-items: center;
+  padding: 16px 0;
+}
+
+.admin-map-entry:first-of-type,
+.admin-map-row-head {
+  border-top: 0;
+}
+
+.admin-map-row small {
+  display: block;
+  color: var(--text-soft);
+  margin-top: 4px;
+}
+
+.admin-map-row-head {
+  border-top: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.map-character-assignment {
+  display: grid;
+  gap: 12px;
+  padding: 0 0 16px;
+}
+
+.assigned-character-list,
+.assignment-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.assignment-controls {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.assignment-controls select,
+.assignment-controls input[type="number"] {
+  min-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  padding: 10px 12px;
+}
+
+.assignment-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-split-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.4fr);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+.admin-form-panel,
+.admin-list-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-character-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+
+.admin-character-row:first-of-type {
+  border-top: 0;
+}
+
+.admin-character-row small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-soft);
+  margin-top: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .grid-4,
+  .admin-map-row,
+  .admin-split-grid,
+  .admin-character-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-map-row {
+    align-items: stretch;
+  }
+}

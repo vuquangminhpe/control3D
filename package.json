@@ -8,9 +8,12 @@
   ],
   "scripts": {
     "dev": "yarn workspace web dev",
+    "dev:realtime": "yarn workspace realtime dev",
     "build": "yarn workspace web build",
     "lint": "yarn workspace web lint",
     "typecheck": "yarn workspace web typecheck",
+    "typecheck:realtime": "yarn workspace realtime typecheck",
+    "seed:admin": "yarn workspace web seed:admin",
     "db:init": "node -e \"console.log('SQLite initializes automatically on first app request')\""
   }
 }

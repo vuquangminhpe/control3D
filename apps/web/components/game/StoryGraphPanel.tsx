@@ -25,6 +25,7 @@ import {
   type StoryVariable,
   type StoryNodeKind,
   type StoryVariableType,
+  type MapCharacter,
 } from "@/store/gameStore";
 
 // Import model scaling helper
@@ -53,6 +54,13 @@ function getStoryAssetActions(asset: any): StoryAssetAction[] {
       id: String(action.id),
       name: String(action.name),
     }));
+}
+
+function formatPreviewPosition(position?: [number, number, number] | null) {
+  if (!position) {
+    return "No preview position set";
+  }
+  return `x ${position[0].toFixed(2)} / y ${position[1].toFixed(2)} / z ${position[2].toFixed(2)}`;
 }
 
 // Custom node styling
@@ -331,7 +339,7 @@ function CharacterNode({ data, selected }: { data: any; selected: boolean }) {
       title={node.title}
       kind="character"
       selected={selected}
-      error={!node.fileUrl ? "No model model set" : undefined}
+      error={!node.mapCharacterId ? "No registered map actor set" : undefined}
     >
       <Handle
         type="target"
@@ -742,11 +750,13 @@ function AnimationNode({ data, selected }: { data: any; selected: boolean }) {
 export function StoryGraphPanel({
   assetLibrary,
   graph,
+  mapCharacters = [],
   onChange,
   onSave,
 }: {
   assetLibrary: any[];
   graph: StoryGraph;
+  mapCharacters?: MapCharacter[];
   onChange: (graph: StoryGraph) => void;
   onSave?: () => void;
 }) {
@@ -841,6 +851,18 @@ export function StoryGraphPanel({
     [],
   );
 
+  const storyActors = useMemo(
+    () =>
+      mapCharacters.filter(
+        (character) =>
+          character.storyEnabled ||
+          character.role === "npc" ||
+          character.role === "story_actor" ||
+          character.role === "boss",
+      ),
+    [mapCharacters],
+  );
+
   // Update node helper
   const updateNode = useCallback(
     (nodeId: string, updates: Partial<StoryNode>) => {
@@ -856,22 +878,36 @@ export function StoryGraphPanel({
 
   // Assign Character
   const assignCharacter = useCallback(
-    (nodeId: string, assetId: string) => {
-      const characterAssets = assetLibrary.filter(
-        (asset) => asset.category === "character",
-      );
-      const asset = characterAssets.find((entry) => entry.id === assetId);
-      if (!asset) return;
+    (nodeId: string, mapCharacterId: string) => {
+      if (!mapCharacterId) {
+        updateNode(nodeId, {
+          mapCharacterId: null,
+          characterId: null,
+          displayLabel: null,
+          previewPosition: null,
+          modelId: null,
+          modelName: null,
+          fileUrl: null,
+        });
+        return;
+      }
+
+      const actor = storyActors.find((entry) => entry.id === mapCharacterId);
+      if (!actor) return;
 
       updateNode(nodeId, {
         kind: "character",
-        modelId: asset.id,
-        modelName: asset.name,
-        fileUrl: asset.fileUrl,
-        title: asset.name,
+        mapCharacterId: actor.id,
+        characterId: actor.characterId,
+        displayLabel: actor.displayLabel,
+        previewPosition: actor.previewPosition ?? actor.spawnPosition,
+        modelId: actor.modelId,
+        modelName: actor.displayLabel || actor.name,
+        fileUrl: actor.fileUrl,
+        title: actor.displayLabel || actor.name,
       });
     },
-    [assetLibrary, updateNode],
+    [storyActors, updateNode],
   );
 
   // Delete node helper
@@ -1022,12 +1058,18 @@ export function StoryGraphPanel({
       x: 100 + Math.random() * 150,
       y: 100 + Math.random() * 150,
     };
+    const isActorNode = kind === "character" || kind === "animation";
+    const defaultActor = isActorNode ? storyActors[0] : null;
+    const defaultActorName = defaultActor
+      ? defaultActor.displayLabel || defaultActor.name
+      : null;
 
     const newNode: StoryNode = {
       id,
       kind,
       title:
-        asset?.name ??
+        defaultActorName ??
+        (!isActorNode ? asset?.name : null) ??
         (kind === "character" ? "Character" : kind.toUpperCase()),
       text:
         kind === "choice"
@@ -1035,9 +1077,14 @@ export function StoryGraphPanel({
           : kind === "start"
             ? "Story begins here."
             : "",
-      modelId: asset?.id ?? null,
-      modelName: asset?.name ?? null,
-      fileUrl: asset?.fileUrl ?? null,
+      mapCharacterId: defaultActor?.id ?? null,
+      characterId: defaultActor?.characterId ?? null,
+      displayLabel: defaultActor?.displayLabel ?? null,
+      previewPosition:
+        defaultActor?.previewPosition ?? defaultActor?.spawnPosition ?? null,
+      modelId: defaultActor?.modelId ?? (!isActorNode ? asset?.id : null),
+      modelName: defaultActorName ?? (!isActorNode ? asset?.name : null),
+      fileUrl: defaultActor?.fileUrl ?? (!isActorNode ? asset?.fileUrl : null),
       action: kind === "shop" ? "trade" : kind === "event" ? "trigger" : null,
       currencyChange: kind === "shop" ? 0 : null,
       position,
@@ -1117,10 +1164,32 @@ export function StoryGraphPanel({
     () => assetLibrary.filter((asset) => asset.category === "character"),
     [assetLibrary],
   );
-  const selectedAnimationAsset = selectedNode?.modelId
-    ? characterAssets.find((asset) => asset.id === selectedNode.modelId)
+  const selectedStoryActor = selectedNode
+    ? storyActors.find((actor) => actor.id === selectedNode.mapCharacterId) ??
+      storyActors.find((actor) => actor.modelId === selectedNode.modelId)
+    : null;
+  const selectedAnimationAsset = selectedStoryActor?.modelId
+    ? characterAssets.find((asset) => asset.id === selectedStoryActor.modelId)
+    : selectedNode?.modelId
+      ? characterAssets.find((asset) => asset.id === selectedNode.modelId)
     : null;
   const selectedAnimationActions = getStoryAssetActions(selectedAnimationAsset);
+  const selectedActorPreviewPosition =
+    selectedStoryActor?.previewPosition ??
+    selectedStoryActor?.spawnPosition ??
+    selectedNode?.previewPosition ??
+    null;
+  const getStoryActorLabel = useCallback(
+    (mapCharacterId: unknown) => {
+      const actor =
+        typeof mapCharacterId === "string"
+          ? storyActors.find((entry) => entry.id === mapCharacterId)
+          : null;
+
+      return actor ? actor.displayLabel || actor.name : String(mapCharacterId ?? "");
+    },
+    [storyActors],
+  );
 
   // Dagre Auto layout algorithm
   const layoutGraph = () => {
@@ -1867,9 +1936,9 @@ export function StoryGraphPanel({
                           fontSize: "11px",
                         }}
                       >
-                        Assign Model
+                        Assign registered map actor
                         <select
-                          value={selectedNode.modelId ?? ""}
+                          value={selectedNode.mapCharacterId ?? selectedStoryActor?.id ?? ""}
                           onChange={(e) =>
                             assignCharacter(selectedNode.id, e.target.value)
                           }
@@ -1882,15 +1951,24 @@ export function StoryGraphPanel({
                             fontSize: "11px",
                           }}
                         >
-                          <option value="">Choose character model</option>
-                          {assetLibrary
-                            .filter((a) => a.category === "character")
-                            .map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.name}
-                              </option>
-                            ))}
+                          <option value="">Choose map actor</option>
+                          {storyActors.map((actor) => (
+                            <option key={actor.id} value={actor.id}>
+                              {actor.displayLabel || actor.name} ({actor.role})
+                            </option>
+                          ))}
                         </select>
+                        {!storyActors.length ? (
+                          <span style={{ color: "#fbbf24", fontSize: "10px" }}>
+                            Register and enable story characters in MapEditor/Admin first.
+                          </span>
+                        ) : null}
+                        {selectedNode.mapCharacterId || selectedStoryActor ? (
+                          <span style={{ color: "#9ca3af", fontSize: "10px" }}>
+                            Preview position:{" "}
+                            {formatPreviewPosition(selectedActorPreviewPosition)}
+                          </span>
+                        ) : null}
                       </label>
                     )}
 
@@ -2093,9 +2171,9 @@ export function StoryGraphPanel({
                                   }}
                                 >
                                   <option value="">Select character</option>
-                                  {characterAssets.map((asset) => (
-                                    <option key={asset.id} value={asset.id}>
-                                      {asset.name}
+                                  {storyActors.map((actor) => (
+                                    <option key={actor.id} value={actor.id}>
+                                      {actor.displayLabel || actor.name}
                                     </option>
                                   ))}
                                 </select>
@@ -2257,9 +2335,9 @@ export function StoryGraphPanel({
                                   }}
                                 >
                                   <option value="">Select character</option>
-                                  {characterAssets.map((asset) => (
-                                    <option key={asset.id} value={asset.id}>
-                                      {asset.name}
+                                  {storyActors.map((actor) => (
+                                    <option key={actor.id} value={actor.id}>
+                                      {actor.displayLabel || actor.name}
                                     </option>
                                   ))}
                                 </select>
@@ -2396,19 +2474,24 @@ export function StoryGraphPanel({
                         >
                           Character
                           <select
-                            value={selectedNode.modelId ?? ""}
+                            value={selectedNode.mapCharacterId ?? selectedStoryActor?.id ?? ""}
                             onChange={(e) => {
-                              const asset = characterAssets.find(
-                                (entry) => entry.id === e.target.value,
-                              );
+                              const actor = storyActors.find((entry) => entry.id === e.target.value);
                               updateNode(selectedNode.id, {
+                                mapCharacterId: actor?.id ?? null,
+                                characterId: actor?.characterId ?? null,
+                                displayLabel: actor?.displayLabel ?? null,
+                                previewPosition:
+                                  actor?.previewPosition ?? actor?.spawnPosition ?? null,
                                 characterActionId: null,
                                 characterActionName: null,
-                                fileUrl: asset?.fileUrl ?? null,
-                                modelId: asset?.id ?? null,
-                                modelName: asset?.name ?? null,
-                                title: asset
-                                  ? `${asset.name} action`
+                                fileUrl: actor?.fileUrl ?? null,
+                                modelId: actor?.modelId ?? null,
+                                modelName: actor
+                                  ? actor.displayLabel || actor.name
+                                  : null,
+                                title: actor
+                                  ? `${actor.displayLabel || actor.name} action`
                                   : selectedNode.title,
                               });
                             }}
@@ -2421,13 +2504,24 @@ export function StoryGraphPanel({
                               fontSize: "11px",
                             }}
                           >
-                            <option value="">Choose character</option>
-                            {characterAssets.map((asset) => (
-                              <option key={asset.id} value={asset.id}>
-                                {asset.name}
+                            <option value="">Choose map actor</option>
+                            {storyActors.map((actor) => (
+                              <option key={actor.id} value={actor.id}>
+                                {actor.displayLabel || actor.name} ({actor.role})
                               </option>
                             ))}
                           </select>
+                          {!storyActors.length ? (
+                            <span style={{ color: "#fbbf24", fontSize: "10px" }}>
+                              No story-enabled map actors are available.
+                            </span>
+                          ) : null}
+                          {selectedNode.mapCharacterId || selectedStoryActor ? (
+                            <span style={{ color: "#9ca3af", fontSize: "10px" }}>
+                              Preview position:{" "}
+                              {formatPreviewPosition(selectedActorPreviewPosition)}
+                            </span>
+                          ) : null}
                         </label>
 
                         <label
@@ -2714,6 +2808,7 @@ export function StoryGraphPanel({
                     <select
                       name="varDefault"
                       required
+                      disabled={storyActors.length === 0}
                       style={{
                         background: "#111827",
                         border: "1px solid rgba(255,255,255,0.12)",
@@ -2723,10 +2818,14 @@ export function StoryGraphPanel({
                         fontSize: "11px",
                       }}
                     >
-                      <option value="">Select Character</option>
-                      {characterAssets.map((asset) => (
-                        <option key={asset.id} value={asset.id}>
-                          {asset.name}
+                      <option value="">
+                        {storyActors.length
+                          ? "Select Character"
+                          : "Register story actor first"}
+                      </option>
+                      {storyActors.map((actor) => (
+                        <option key={actor.id} value={actor.id}>
+                          {actor.displayLabel || actor.name}
                         </option>
                       ))}
                     </select>
@@ -2811,7 +2910,7 @@ export function StoryGraphPanel({
                         <span style={{ fontSize: "9px", color: "#9ca3af" }}>
                           Type: {v.type} | Default: {
                             v.type === "character"
-                              ? (characterAssets.find((c) => c.id === v.defaultValue)?.name || v.defaultValue)
+                              ? getStoryActorLabel(v.defaultValue)
                               : String(v.defaultValue)
                           }
                         </span>

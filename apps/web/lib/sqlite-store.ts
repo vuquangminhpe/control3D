@@ -86,6 +86,64 @@ export type ModelVersionRecord = {
   createdAt: string;
 };
 
+export type AuthSubjectType = "admin" | "user";
+export type AdminRole = "super_admin" | "map_manager" | "moderator" | "analyst";
+export type UserStatus = "active" | "disabled" | "banned";
+
+export type AdminRecord = {
+  id: string;
+  email: string;
+  passwordHash: string;
+  role: AdminRole;
+  permissions: string[];
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type UserRecord = {
+  id: string;
+  email: string;
+  username: string;
+  displayName: string;
+  passwordHash: string;
+  status: UserStatus;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuthSessionRecord = {
+  id: string;
+  subjectType: AuthSubjectType;
+  adminId: string | null;
+  userId: string | null;
+  refreshTokenHash: string;
+  refreshTokenFamily: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  expiresAt: string;
+  revokedAt: string | null;
+  rotatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChatChannel = "map" | "party" | "system";
+
+export type ChatMessageRecord = {
+  id: string;
+  mapId: string;
+  sessionId: string | null;
+  userId: string;
+  displayName: string;
+  channel: ChatChannel;
+  body: string;
+  isDeleted: boolean;
+  createdAt: string;
+};
+
 export type AnimationSourceKind = "single" | "pack";
 export type AnimationFormat = "fbx" | "zip";
 
@@ -176,6 +234,10 @@ export type StoryNodeRecord = {
   modelId?: string | null;
   modelName?: string | null;
   fileUrl?: string | null;
+  mapCharacterId?: string | null;
+  characterId?: string | null;
+  displayLabel?: string | null;
+  previewPosition?: [number, number, number] | null;
   action?: string | null;
   characterActionId?: string | null;
   characterActionName?: string | null;
@@ -197,9 +259,63 @@ export type StoryGraphRecord = {
   edges: StoryEdgeRecord[];
 };
 
+export type LevelStatus = "draft" | "published" | "archived";
+export type MapCharacterRole = "playable" | "npc" | "story_actor" | "boss";
+
+export type MapCharacterRecord = {
+  id: string;
+  characterId: string;
+  modelId: string;
+  name: string;
+  fileUrl: string;
+  format?: string;
+  role: MapCharacterRole;
+  displayLabel: string | null;
+  isDefault: boolean;
+  pointPrice: number;
+  spawnPosition: [number, number, number] | null;
+  previewPosition: [number, number, number] | null;
+  storyEnabled: boolean;
+  sortOrder: number;
+};
+
+export type MapCharacterInput = {
+  id?: string;
+  characterId: string;
+  modelId: string;
+  name: string;
+  fileUrl: string;
+  format?: string;
+  role?: MapCharacterRole;
+  displayLabel?: string | null;
+  isDefault?: boolean;
+  pointPrice?: number;
+  spawnPosition?: [number, number, number] | null;
+  previewPosition?: [number, number, number] | null;
+  storyEnabled?: boolean;
+  sortOrder?: number;
+};
+
+export type GameCharacterRecord = {
+  id: string;
+  name: string;
+  description: string | null;
+  modelId: string | null;
+  fileUrl: string;
+  format: string | null;
+  animationManifest: unknown | null;
+  baseStats: unknown | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type LevelRecord = {
   id: string;
   name: string;
+  slug: string;
+  description: string | null;
+  status: LevelStatus;
   mapModelUrl: string;
   playerCharacter: {
     modelId: string;
@@ -212,6 +328,7 @@ export type LevelRecord = {
   robotStory: string;
   storyGraph: StoryGraphRecord;
   zombieSpawns: ZombieSpawnRecord[];
+  mapCharacters: MapCharacterRecord[];
   placedObjects: Array<{
     id: string;
     modelId: string;
@@ -222,6 +339,9 @@ export type LevelRecord = {
     scale: [number, number, number];
     isMap?: boolean;
   }>;
+  maxPlayers: number;
+  publishedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -373,9 +493,99 @@ function initializeDb(database: DatabaseSync) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS admins (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'map_manager',
+      permissions_json TEXT NOT NULL DEFAULT '[]',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_login_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_login_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      id TEXT PRIMARY KEY,
+      subject_type TEXT NOT NULL,
+      admin_id TEXT,
+      user_id TEXT,
+      refresh_token_hash TEXT NOT NULL UNIQUE,
+      refresh_token_family TEXT NOT NULL,
+      user_agent TEXT,
+      ip_address TEXT,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      rotated_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS user_points (
+      user_id TEXT PRIMARY KEY,
+      balance INTEGER NOT NULL DEFAULT 0,
+      lifetime INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      map_id TEXT NOT NULL,
+      session_id TEXT,
+      user_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'map',
+      body TEXT NOT NULL,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (map_id) REFERENCES levels(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS game_characters (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      model_id TEXT,
+      file_url TEXT NOT NULL,
+      format TEXT,
+      animation_manifest_json TEXT,
+      base_stats_json TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS auth_sessions_admin_idx ON auth_sessions(admin_id);
+    CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS auth_sessions_family_idx ON auth_sessions(refresh_token_family);
+    CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS chat_messages_map_created_idx ON chat_messages(map_id, created_at);
+    CREATE INDEX IF NOT EXISTS chat_messages_user_created_idx ON chat_messages(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS game_characters_model_idx ON game_characters(model_id);
+    CREATE INDEX IF NOT EXISTS game_characters_active_idx ON game_characters(is_active);
+
     CREATE TABLE IF NOT EXISTS levels (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      slug TEXT,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
       map_model_url TEXT NOT NULL,
       player_character_json TEXT,
       player_spawn_json TEXT NOT NULL,
@@ -383,14 +593,53 @@ function initializeDb(database: DatabaseSync) {
       robot_story TEXT NOT NULL,
       story_graph_json TEXT NOT NULL DEFAULT '{"nodes":[{"id":"story-start","kind":"start","title":"Start","text":"Story begins here.","position":{"x":96,"y":160}}],"edges":[]}',
       zombie_spawns_json TEXT NOT NULL,
+      map_characters_json TEXT NOT NULL DEFAULT '[]',
       placed_objects_json TEXT NOT NULL DEFAULT '[]',
+      max_players INTEGER NOT NULL DEFAULT 50,
+      published_at TEXT,
+      archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
   `);
 
   try {
+    database.exec("ALTER TABLE levels ADD COLUMN slug TEXT;");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN description TEXT;");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN status TEXT NOT NULL DEFAULT 'draft';");
+  } catch {
+    // Column already exists.
+  }
+  try {
     database.exec("ALTER TABLE levels ADD COLUMN placed_objects_json TEXT NOT NULL DEFAULT '[]';");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN map_characters_json TEXT NOT NULL DEFAULT '[]';");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN max_players INTEGER NOT NULL DEFAULT 50;");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN published_at TEXT;");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    database.exec("ALTER TABLE levels ADD COLUMN archived_at TEXT;");
   } catch {
     // Column already exists.
   }
@@ -530,18 +779,126 @@ function mapAnimationAsset(row: Record<string, unknown>): AnimationAssetRecord {
   };
 }
 
-function mapLevel(row: Record<string, unknown>): LevelRecord {
+function normalizeAdminRole(input: unknown): AdminRole {
+  return input === "super_admin" ||
+    input === "moderator" ||
+    input === "analyst" ||
+    input === "map_manager"
+    ? input
+    : "map_manager";
+}
+
+function normalizeUserStatus(input: unknown): UserStatus {
+  return input === "disabled" || input === "banned" || input === "active"
+    ? input
+    : "active";
+}
+
+function mapAdmin(row: Record<string, unknown>): AdminRecord {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    passwordHash: String(row.password_hash),
+    role: normalizeAdminRole(row.role),
+    permissions: parseJson(row.permissions_json as string | null, []),
+    isActive: Number(row.is_active) === 1,
+    lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapUser(row: Record<string, unknown>): UserRecord {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    username: String(row.username),
+    displayName: String(row.display_name),
+    passwordHash: String(row.password_hash),
+    status: normalizeUserStatus(row.status),
+    lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapAuthSession(row: Record<string, unknown>): AuthSessionRecord {
+  return {
+    id: String(row.id),
+    subjectType: row.subject_type === "admin" ? "admin" : "user",
+    adminId: row.admin_id ? String(row.admin_id) : null,
+    userId: row.user_id ? String(row.user_id) : null,
+    refreshTokenHash: String(row.refresh_token_hash),
+    refreshTokenFamily: String(row.refresh_token_family),
+    userAgent: row.user_agent ? String(row.user_agent) : null,
+    ipAddress: row.ip_address ? String(row.ip_address) : null,
+    expiresAt: String(row.expires_at),
+    revokedAt: row.revoked_at ? String(row.revoked_at) : null,
+    rotatedAt: row.rotated_at ? String(row.rotated_at) : null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function normalizeChatChannel(input: unknown): ChatChannel {
+  return input === "party" || input === "system" ? input : "map";
+}
+
+function mapChatMessage(row: Record<string, unknown>): ChatMessageRecord {
+  return {
+    id: String(row.id),
+    mapId: String(row.map_id),
+    sessionId: row.session_id ? String(row.session_id) : null,
+    userId: String(row.user_id),
+    displayName: String(row.display_name),
+    channel: normalizeChatChannel(row.channel),
+    body: String(row.body),
+    isDeleted: Number(row.is_deleted) === 1,
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapGameCharacter(row: Record<string, unknown>): GameCharacterRecord {
   return {
     id: String(row.id),
     name: String(row.name),
+    description: row.description ? String(row.description) : null,
+    modelId: row.model_id ? String(row.model_id) : null,
+    fileUrl: String(row.file_url),
+    format: row.format ? String(row.format) : null,
+    animationManifest: parseJson(row.animation_manifest_json as string | null, null),
+    baseStats: parseJson(row.base_stats_json as string | null, null),
+    isActive: Number(row.is_active) === 1,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapLevel(row: Record<string, unknown>): LevelRecord {
+  const playerCharacter = parseJson(row.player_character_json as string | null, null);
+  const mapCharacters = normalizeMapCharacters(
+    parseJson(row.map_characters_json as string | null, []),
+    playerCharacter,
+  );
+
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    slug: row.slug ? String(row.slug) : slugify(String(row.name)),
+    description: row.description ? String(row.description) : null,
+    status: normalizeLevelStatus(row.status),
     mapModelUrl: String(row.map_model_url),
-    playerCharacter: parseJson(row.player_character_json as string | null, null),
+    playerCharacter,
     playerSpawn: parseJson(row.player_spawn_json as string | null, [0, 1.5, 5]),
     robotSpawn: parseJson(row.robot_spawn_json as string | null, [-9, 1.2, 12]),
     robotStory: String(row.robot_story ?? ""),
     storyGraph: parseJson(row.story_graph_json as string | null, EMPTY_STORY_GRAPH),
     zombieSpawns: parseJson(row.zombie_spawns_json as string | null, []),
+    mapCharacters,
     placedObjects: parseJson(row.placed_objects_json as string | null, []),
+    maxPlayers: Math.max(1, Number(row.max_players ?? 50) || 50),
+    publishedAt: row.published_at ? String(row.published_at) : null,
+    archivedAt: row.archived_at ? String(row.archived_at) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -569,6 +926,89 @@ function parseVector(
   return values.length === 3
     ? ([values[0], values[1], values[2]] as [number, number, number])
     : fallback;
+}
+
+function slugify(input: string) {
+  const slug = input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || `map-${randomUUID().slice(0, 8)}`;
+}
+
+function normalizeLevelStatus(input: unknown): LevelStatus {
+  return input === "published" || input === "archived" || input === "draft"
+    ? input
+    : "draft";
+}
+
+function normalizeMapCharacters(
+  input: unknown,
+  playerCharacter: LevelRecord["playerCharacter"],
+): MapCharacterRecord[] {
+  const raw = Array.isArray(input) ? input : [];
+  const normalized = raw
+    .filter((entry): entry is Record<string, unknown> =>
+      Boolean(entry && typeof entry === "object"),
+    )
+    .map((entry, index) => ({
+      id: String(entry.id || `map-character-${index + 1}`),
+      characterId: String(entry.characterId || entry.modelId || ""),
+      modelId: String(entry.modelId || entry.characterId || ""),
+      name: String(entry.name || entry.displayLabel || "Character"),
+      fileUrl: String(entry.fileUrl || ""),
+      format: entry.format ? String(entry.format) : undefined,
+      role: (
+        entry.role === "npc" ||
+        entry.role === "story_actor" ||
+        entry.role === "boss"
+          ? entry.role
+          : "playable"
+      ) as MapCharacterRole,
+      displayLabel: entry.displayLabel ? String(entry.displayLabel) : null,
+      isDefault: Boolean(entry.isDefault),
+      pointPrice: Math.max(0, Number(entry.pointPrice ?? 0) || 0),
+      spawnPosition: Array.isArray(entry.spawnPosition) && entry.spawnPosition.length === 3
+        ? (entry.spawnPosition.map(Number) as [number, number, number])
+        : null,
+      previewPosition: Array.isArray(entry.previewPosition) && entry.previewPosition.length === 3
+        ? (entry.previewPosition.map(Number) as [number, number, number])
+        : null,
+      storyEnabled: Boolean(entry.storyEnabled),
+      sortOrder: Math.max(0, Number(entry.sortOrder ?? index) || 0),
+    }))
+    .filter((entry) => entry.characterId && entry.modelId && entry.fileUrl);
+
+  if (!normalized.length && playerCharacter) {
+    return [
+      {
+        id: `map-character-${playerCharacter.modelId}`,
+        characterId: playerCharacter.modelId,
+        modelId: playerCharacter.modelId,
+        name: playerCharacter.name,
+        fileUrl: playerCharacter.fileUrl,
+        format: playerCharacter.format,
+        role: "playable",
+        displayLabel: playerCharacter.name,
+        isDefault: true,
+        pointPrice: 0,
+        spawnPosition: null,
+        previewPosition: null,
+        storyEnabled: true,
+        sortOrder: 0,
+      },
+    ];
+  }
+
+  if (normalized.some((entry) => entry.isDefault)) {
+    return normalized;
+  }
+
+  return normalized.map((entry, index) => ({
+    ...entry,
+    isDefault: index === 0 && entry.role === "playable",
+  }));
 }
 
 export function getFormatFromFilename(filename: string): ModelFormat | null {
@@ -870,9 +1310,568 @@ export async function getStats() {
   };
 }
 
+export async function countAdmins() {
+  const row = db.prepare("SELECT COUNT(*) as count FROM admins").get() as {
+    count: number;
+  };
+  return Number(row.count ?? 0);
+}
+
+export async function createAdmin(input: {
+  email: string;
+  passwordHash: string;
+  role?: AdminRole;
+  permissions?: string[];
+}) {
+  const now = new Date().toISOString();
+  const record: AdminRecord = {
+    id: randomUUID(),
+    email: input.email.trim().toLowerCase(),
+    passwordHash: input.passwordHash,
+    role: input.role ?? "map_manager",
+    permissions: input.permissions ?? [],
+    isActive: true,
+    lastLoginAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO admins (
+      id, email, password_hash, role, permissions_json, is_active, last_login_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    record.id,
+    record.email,
+    record.passwordHash,
+    record.role,
+    JSON.stringify(record.permissions),
+    record.isActive ? 1 : 0,
+    record.lastLoginAt,
+    record.createdAt,
+    record.updatedAt,
+  );
+
+  return record;
+}
+
+export async function getAdminByEmail(email: string) {
+  const row = db.prepare("SELECT * FROM admins WHERE email = ?").get(email.trim().toLowerCase()) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapAdmin(row) : null;
+}
+
+export async function getAdminById(id: string) {
+  const row = db.prepare("SELECT * FROM admins WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapAdmin(row) : null;
+}
+
+export async function markAdminLogin(id: string) {
+  db.prepare("UPDATE admins SET last_login_at = ?, updated_at = ? WHERE id = ?").run(
+    new Date().toISOString(),
+    new Date().toISOString(),
+    id,
+  );
+}
+
+export async function listChatMessagesForMap(mapId: string, limit = 50) {
+  const rows = db
+    .prepare(
+      `
+      SELECT *
+      FROM chat_messages
+      WHERE map_id = ?
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `,
+    )
+    .all(mapId, Math.max(1, Math.min(100, Math.floor(limit)))) as Record<
+    string,
+    unknown
+  >[];
+
+  return rows.map(mapChatMessage).reverse();
+}
+
+export async function createChatMessage(input: {
+  id?: string;
+  mapId: string;
+  sessionId?: string | null;
+  userId: string;
+  displayName: string;
+  channel?: ChatChannel;
+  body: string;
+  createdAt?: string;
+}) {
+  const now = input.createdAt ?? new Date().toISOString();
+  const record: ChatMessageRecord = {
+    id: input.id ?? randomUUID(),
+    mapId: input.mapId,
+    sessionId: input.sessionId ?? null,
+    userId: input.userId,
+    displayName: input.displayName.trim().slice(0, 40) || "Player",
+    channel: input.channel ?? "map",
+    body: input.body,
+    isDeleted: false,
+    createdAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO chat_messages (
+      id, map_id, session_id, user_id, display_name, channel, body, is_deleted, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    record.id,
+    record.mapId,
+    record.sessionId,
+    record.userId,
+    record.displayName,
+    record.channel,
+    record.body,
+    record.isDeleted ? 1 : 0,
+    record.createdAt,
+  );
+
+  return record;
+}
+
+export async function createUser(input: {
+  email: string;
+  username: string;
+  displayName: string;
+  passwordHash: string;
+}) {
+  const now = new Date().toISOString();
+  const record: UserRecord = {
+    id: randomUUID(),
+    email: input.email.trim().toLowerCase(),
+    username: input.username.trim(),
+    displayName: input.displayName.trim(),
+    passwordHash: input.passwordHash,
+    status: "active",
+    lastLoginAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO users (
+      id, email, username, display_name, password_hash, status, last_login_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    record.id,
+    record.email,
+    record.username,
+    record.displayName,
+    record.passwordHash,
+    record.status,
+    record.lastLoginAt,
+    record.createdAt,
+    record.updatedAt,
+  );
+
+  db.prepare("INSERT INTO user_points (user_id, balance, lifetime, updated_at) VALUES (?, 0, 0, ?)").run(
+    record.id,
+    now,
+  );
+
+  return record;
+}
+
+export async function getUserByEmail(email: string) {
+  const row = db.prepare("SELECT * FROM users WHERE email = ?").get(email.trim().toLowerCase()) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapUser(row) : null;
+}
+
+export async function getUserById(id: string) {
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapUser(row) : null;
+}
+
+export async function markUserLogin(id: string) {
+  db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?").run(
+    new Date().toISOString(),
+    new Date().toISOString(),
+    id,
+  );
+}
+
+export async function createAuthSession(input: {
+  subjectType: AuthSubjectType;
+  adminId?: string | null;
+  userId?: string | null;
+  refreshTokenHash: string;
+  refreshTokenFamily?: string;
+  userAgent?: string | null;
+  ipAddress?: string | null;
+  expiresAt: string;
+}) {
+  const now = new Date().toISOString();
+  const record: AuthSessionRecord = {
+    id: randomUUID(),
+    subjectType: input.subjectType,
+    adminId: input.adminId ?? null,
+    userId: input.userId ?? null,
+    refreshTokenHash: input.refreshTokenHash,
+    refreshTokenFamily: input.refreshTokenFamily ?? randomUUID(),
+    userAgent: input.userAgent ?? null,
+    ipAddress: input.ipAddress ?? null,
+    expiresAt: input.expiresAt,
+    revokedAt: null,
+    rotatedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO auth_sessions (
+      id, subject_type, admin_id, user_id, refresh_token_hash, refresh_token_family, user_agent,
+      ip_address, expires_at, revoked_at, rotated_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    record.id,
+    record.subjectType,
+    record.adminId,
+    record.userId,
+    record.refreshTokenHash,
+    record.refreshTokenFamily,
+    record.userAgent,
+    record.ipAddress,
+    record.expiresAt,
+    record.revokedAt,
+    record.rotatedAt,
+    record.createdAt,
+    record.updatedAt,
+  );
+
+  return record;
+}
+
+export async function getAuthSessionByRefreshHash(refreshTokenHash: string) {
+  const row = db
+    .prepare("SELECT * FROM auth_sessions WHERE refresh_token_hash = ?")
+    .get(refreshTokenHash) as Record<string, unknown> | undefined;
+  return row ? mapAuthSession(row) : null;
+}
+
+export async function getAuthSessionById(id: string) {
+  const row = db.prepare("SELECT * FROM auth_sessions WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapAuthSession(row) : null;
+}
+
+export async function revokeAuthSession(id: string) {
+  const now = new Date().toISOString();
+  db.prepare("UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE id = ?").run(
+    now,
+    now,
+    id,
+  );
+}
+
+export async function revokeAuthSessionFamily(refreshTokenFamily: string) {
+  const now = new Date().toISOString();
+  db.prepare(
+    "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE refresh_token_family = ?",
+  ).run(now, now, refreshTokenFamily);
+}
+
+export async function rotateAuthSession(
+  currentSession: AuthSessionRecord,
+  nextRefreshTokenHash: string,
+  expiresAt: string,
+) {
+  const now = new Date().toISOString();
+  db.prepare("UPDATE auth_sessions SET revoked_at = ?, rotated_at = ?, updated_at = ? WHERE id = ?").run(
+    now,
+    now,
+    now,
+    currentSession.id,
+  );
+
+  return createAuthSession({
+    subjectType: currentSession.subjectType,
+    adminId: currentSession.adminId,
+    userId: currentSession.userId,
+    refreshTokenHash: nextRefreshTokenHash,
+    refreshTokenFamily: currentSession.refreshTokenFamily,
+    userAgent: currentSession.userAgent,
+    ipAddress: currentSession.ipAddress,
+    expiresAt,
+  });
+}
+
+export async function listGameCharacters(filters?: { includeInactive?: boolean }) {
+  const rows = db
+    .prepare(
+      filters?.includeInactive
+        ? "SELECT * FROM game_characters ORDER BY updated_at DESC"
+        : "SELECT * FROM game_characters WHERE is_active = 1 ORDER BY updated_at DESC",
+    )
+    .all() as Record<string, unknown>[];
+  return rows.map(mapGameCharacter);
+}
+
+export async function getGameCharacterById(id: string) {
+  const row = db.prepare("SELECT * FROM game_characters WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? mapGameCharacter(row) : null;
+}
+
+export async function createGameCharacter(input: {
+  id?: string;
+  name: string;
+  description?: string | null;
+  modelId?: string | null;
+  fileUrl: string;
+  format?: string | null;
+  animationManifest?: unknown;
+  baseStats?: unknown;
+  isActive?: boolean;
+}) {
+  const now = new Date().toISOString();
+  const existing = input.id ? await getGameCharacterById(input.id) : null;
+  const record: GameCharacterRecord = {
+    id: input.id || randomUUID(),
+    name: input.name.trim(),
+    description:
+      typeof input.description === "string"
+        ? input.description.trim() || null
+        : existing?.description ?? null,
+    modelId: input.modelId ?? existing?.modelId ?? null,
+    fileUrl: input.fileUrl.trim(),
+    format: input.format ?? existing?.format ?? null,
+    animationManifest: input.animationManifest ?? existing?.animationManifest ?? null,
+    baseStats: input.baseStats ?? existing?.baseStats ?? null,
+    isActive: input.isActive ?? existing?.isActive ?? true,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  db.prepare(
+    `
+    INSERT INTO game_characters (
+      id, name, description, model_id, file_url, format, animation_manifest_json, base_stats_json,
+      is_active, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      model_id = excluded.model_id,
+      file_url = excluded.file_url,
+      format = excluded.format,
+      animation_manifest_json = excluded.animation_manifest_json,
+      base_stats_json = excluded.base_stats_json,
+      is_active = excluded.is_active,
+      updated_at = excluded.updated_at
+  `,
+  ).run(
+    record.id,
+    record.name,
+    record.description,
+    record.modelId,
+    record.fileUrl,
+    record.format,
+    record.animationManifest ? JSON.stringify(record.animationManifest) : null,
+    record.baseStats ? JSON.stringify(record.baseStats) : null,
+    record.isActive ? 1 : 0,
+    record.createdAt,
+    record.updatedAt,
+  );
+
+  return record;
+}
+
+export async function updateGameCharacter(
+  id: string,
+  input: Partial<Omit<GameCharacterRecord, "id" | "createdAt" | "updatedAt">>,
+) {
+  const current = await getGameCharacterById(id);
+  if (!current) return null;
+  return createGameCharacter({
+    ...current,
+    ...input,
+    id,
+  });
+}
+
+export async function deleteGameCharacter(id: string) {
+  const current = await getGameCharacterById(id);
+  if (!current) return null;
+  return updateGameCharacter(id, { isActive: false });
+}
+
+export async function assignCharacterToLevel(
+  levelId: string,
+  input: {
+    characterId: string;
+    role?: MapCharacterRole;
+    displayLabel?: string | null;
+    isDefault?: boolean;
+    pointPrice?: number;
+    spawnPosition?: [number, number, number] | null;
+    previewPosition?: [number, number, number] | null;
+    storyEnabled?: boolean;
+    sortOrder?: number;
+  },
+) {
+  const level = await getLevelById(levelId);
+  if (!level) return null;
+  const character = await getGameCharacterById(input.characterId);
+  if (!character || !character.isActive) return null;
+
+  const nextCharacter: MapCharacterRecord = {
+    id:
+      level.mapCharacters.find((entry) => entry.characterId === character.id)?.id ??
+      `map-character-${randomUUID()}`,
+    characterId: character.id,
+    modelId: character.modelId ?? character.id,
+    name: character.name,
+    fileUrl: character.fileUrl,
+    format: character.format ?? undefined,
+    role: input.role ?? "playable",
+    displayLabel: input.displayLabel ?? character.name,
+    isDefault: Boolean(input.isDefault),
+    pointPrice: Math.max(0, Number(input.pointPrice ?? 0) || 0),
+    spawnPosition: input.spawnPosition ?? null,
+    previewPosition: input.previewPosition ?? null,
+    storyEnabled: Boolean(input.storyEnabled),
+    sortOrder: Math.max(0, Number(input.sortOrder ?? level.mapCharacters.length) || 0),
+  };
+
+  const existing = level.mapCharacters.filter((entry) => entry.characterId !== character.id);
+  const mapCharacters = [...existing, nextCharacter]
+    .map((entry) => ({
+      ...entry,
+      isDefault:
+        nextCharacter.isDefault && entry.characterId !== nextCharacter.characterId
+          ? false
+          : entry.isDefault,
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  return createLevel({
+    ...level,
+    mapCharacters,
+    playerCharacter:
+      nextCharacter.isDefault && nextCharacter.role === "playable"
+        ? {
+            modelId: nextCharacter.modelId,
+            name: nextCharacter.name,
+            fileUrl: nextCharacter.fileUrl,
+            format: nextCharacter.format,
+          }
+        : level.playerCharacter,
+  });
+}
+
+export async function updateLevelMapCharacter(
+  levelId: string,
+  mapCharacterId: string,
+  input: Partial<MapCharacterInput>,
+) {
+  const level = await getLevelById(levelId);
+  if (!level) return null;
+  const current = level.mapCharacters.find((entry) => entry.id === mapCharacterId);
+  if (!current) return null;
+
+  const updated: MapCharacterRecord = {
+    ...current,
+    ...input,
+    id: current.id,
+    characterId: current.characterId,
+    modelId: current.modelId,
+    name: input.name ?? current.name,
+    fileUrl: input.fileUrl ?? current.fileUrl,
+    role: input.role ?? current.role,
+    displayLabel:
+      input.displayLabel === undefined ? current.displayLabel : input.displayLabel,
+    isDefault: input.isDefault ?? current.isDefault,
+    pointPrice: Math.max(0, Number(input.pointPrice ?? current.pointPrice) || 0),
+    spawnPosition:
+      input.spawnPosition === undefined ? current.spawnPosition : input.spawnPosition,
+    previewPosition:
+      input.previewPosition === undefined
+        ? current.previewPosition
+        : input.previewPosition,
+    storyEnabled: input.storyEnabled ?? current.storyEnabled,
+    sortOrder: Math.max(0, Number(input.sortOrder ?? current.sortOrder) || 0),
+  };
+
+  const mapCharacters = level.mapCharacters
+    .map((entry) => {
+      if (entry.id === mapCharacterId) return updated;
+      return updated.isDefault ? { ...entry, isDefault: false } : entry;
+    })
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  return createLevel({
+    ...level,
+    mapCharacters,
+    playerCharacter:
+      updated.isDefault && updated.role === "playable"
+        ? {
+            modelId: updated.modelId,
+            name: updated.name,
+            fileUrl: updated.fileUrl,
+            format: updated.format,
+          }
+        : level.playerCharacter,
+  });
+}
+
+export async function removeCharacterFromLevel(levelId: string, mapCharacterId: string) {
+  const level = await getLevelById(levelId);
+  if (!level) return null;
+  const exists = level.mapCharacters.some((entry) => entry.id === mapCharacterId);
+  if (!exists) return null;
+
+  const removed = level.mapCharacters.find((entry) => entry.id === mapCharacterId);
+  const mapCharacters = level.mapCharacters.filter((entry) => entry.id !== mapCharacterId);
+  const nextDefault = mapCharacters.some((entry) => entry.isDefault)
+    ? mapCharacters
+    : mapCharacters.map((entry, index) => ({
+        ...entry,
+        isDefault: index === 0 && entry.role === "playable",
+      }));
+
+  return createLevel({
+    ...level,
+    mapCharacters: nextDefault,
+    playerCharacter:
+      removed?.isDefault || removed?.modelId === level.playerCharacter?.modelId
+        ? null
+        : level.playerCharacter,
+  });
+}
+
 export async function listLevels() {
   const rows = db
     .prepare("SELECT * FROM levels ORDER BY updated_at DESC")
+    .all() as Record<string, unknown>[];
+  return rows.map(mapLevel);
+}
+
+export async function listPublishedLevels() {
+  const rows = db
+    .prepare("SELECT * FROM levels WHERE status = 'published' ORDER BY published_at DESC, updated_at DESC")
     .all() as Record<string, unknown>[];
   return rows.map(mapLevel);
 }
@@ -887,6 +1886,9 @@ export async function getLevelById(id: string) {
 export async function createLevel(input: {
   id?: string;
   name: string;
+  slug?: string;
+  description?: string | null;
+  status?: LevelStatus;
   mapModelUrl: string;
   playerCharacter?: LevelRecord["playerCharacter"];
   playerSpawn: [number, number, number];
@@ -894,13 +1896,32 @@ export async function createLevel(input: {
   robotStory: string;
   storyGraph?: StoryGraphRecord;
   zombieSpawns: ZombieSpawnRecord[];
+  mapCharacters?: MapCharacterInput[];
   placedObjects?: LevelRecord["placedObjects"];
+  maxPlayers?: number;
+  publishedAt?: string | null;
+  archivedAt?: string | null;
 }) {
   const now = new Date().toISOString();
   const existing = input.id ? await getLevelById(input.id) : null;
+  const status = input.status ?? existing?.status ?? "draft";
+  const publishedAt =
+    status === "published"
+      ? input.publishedAt ?? existing?.publishedAt ?? now
+      : input.publishedAt ?? existing?.publishedAt ?? null;
+  const archivedAt =
+    status === "archived"
+      ? input.archivedAt ?? existing?.archivedAt ?? now
+      : input.archivedAt ?? existing?.archivedAt ?? null;
   const level: LevelRecord = {
     id: input.id || randomUUID(),
     name: input.name.trim(),
+    slug: input.slug?.trim() || existing?.slug || slugify(input.name),
+    description:
+      typeof input.description === "string"
+        ? input.description.trim() || null
+        : existing?.description ?? null,
+    status,
     mapModelUrl: input.mapModelUrl.trim(),
     playerCharacter: input.playerCharacter ?? null,
     playerSpawn: input.playerSpawn,
@@ -908,7 +1929,14 @@ export async function createLevel(input: {
     robotStory: input.robotStory.trim(),
     storyGraph: input.storyGraph ?? EMPTY_STORY_GRAPH,
     zombieSpawns: input.zombieSpawns,
+    mapCharacters: normalizeMapCharacters(
+      input.mapCharacters ?? existing?.mapCharacters ?? [],
+      input.playerCharacter ?? existing?.playerCharacter ?? null,
+    ),
     placedObjects: input.placedObjects ?? [],
+    maxPlayers: Math.max(1, Number(input.maxPlayers ?? existing?.maxPlayers ?? 50) || 50),
+    publishedAt,
+    archivedAt,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -916,10 +1944,15 @@ export async function createLevel(input: {
   db.prepare(
     `
     INSERT INTO levels (
-      id, name, map_model_url, player_character_json, player_spawn_json, robot_spawn_json, robot_story, story_graph_json, zombie_spawns_json, placed_objects_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, name, slug, description, status, map_model_url, player_character_json, player_spawn_json,
+      robot_spawn_json, robot_story, story_graph_json, zombie_spawns_json, map_characters_json,
+      placed_objects_json, max_players, published_at, archived_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
+      slug = excluded.slug,
+      description = excluded.description,
+      status = excluded.status,
       map_model_url = excluded.map_model_url,
       player_character_json = excluded.player_character_json,
       player_spawn_json = excluded.player_spawn_json,
@@ -927,12 +1960,19 @@ export async function createLevel(input: {
       robot_story = excluded.robot_story,
       story_graph_json = excluded.story_graph_json,
       zombie_spawns_json = excluded.zombie_spawns_json,
+      map_characters_json = excluded.map_characters_json,
       placed_objects_json = excluded.placed_objects_json,
+      max_players = excluded.max_players,
+      published_at = excluded.published_at,
+      archived_at = excluded.archived_at,
       updated_at = excluded.updated_at
   `,
   ).run(
     level.id,
     level.name,
+    level.slug,
+    level.description,
+    level.status,
     level.mapModelUrl,
     level.playerCharacter ? JSON.stringify(level.playerCharacter) : null,
     JSON.stringify(level.playerSpawn),
@@ -940,12 +1980,29 @@ export async function createLevel(input: {
     level.robotStory,
     JSON.stringify(level.storyGraph),
     JSON.stringify(level.zombieSpawns),
+    JSON.stringify(level.mapCharacters),
     JSON.stringify(level.placedObjects),
+    level.maxPlayers,
+    level.publishedAt,
+    level.archivedAt,
     level.createdAt,
     level.updatedAt,
   );
 
   return level;
+}
+
+export async function setLevelStatus(id: string, status: LevelStatus) {
+  const current = await getLevelById(id);
+  if (!current) return null;
+  return createLevel({
+    ...current,
+    status,
+    publishedAt:
+      status === "published" ? current.publishedAt ?? new Date().toISOString() : current.publishedAt,
+    archivedAt:
+      status === "archived" ? current.archivedAt ?? new Date().toISOString() : current.archivedAt,
+  });
 }
 
 export async function deleteLevel(id: string) {

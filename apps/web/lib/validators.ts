@@ -58,6 +58,10 @@ export const storyNodeSchema = z.object({
   modelId: z.string().nullable().optional(),
   modelName: z.string().nullable().optional(),
   fileUrl: z.string().nullable().optional(),
+  mapCharacterId: z.string().nullable().optional(),
+  characterId: z.string().nullable().optional(),
+  displayLabel: z.string().nullable().optional(),
+  previewPosition: vector3Schema.nullable().optional(),
   action: z.string().nullable().optional(),
   characterActionId: z.string().nullable().optional(),
   characterActionName: z.string().nullable().optional(),
@@ -111,9 +115,29 @@ export const storyGraphSchema = z.object({
 });
 
 
+export const mapCharacterSchema = z.object({
+  id: z.string().min(1).optional(),
+  characterId: z.string().min(1),
+  modelId: z.string().min(1),
+  name: z.string().min(1),
+  fileUrl: z.string().min(1),
+  format: z.string().optional(),
+  role: z.enum(["playable", "npc", "story_actor", "boss"]).default("playable"),
+  displayLabel: z.string().nullable().optional(),
+  isDefault: z.boolean().default(false),
+  pointPrice: z.number().int().min(0).default(0),
+  spawnPosition: vector3Schema.nullable().optional(),
+  previewPosition: vector3Schema.nullable().optional(),
+  storyEnabled: z.boolean().default(false),
+  sortOrder: z.number().int().min(0).default(0),
+});
+
 export const createLevelSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
+  slug: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  status: z.enum(["draft", "published", "archived"]).optional(),
   mapModelUrl: z.string().min(1),
   playerCharacter: z.object({
     modelId: z.string().min(1),
@@ -126,6 +150,7 @@ export const createLevelSchema = z.object({
   robotStory: z.string().default(""),
   storyGraph: storyGraphSchema,
   zombieSpawns: z.array(zombieSpawnSchema),
+  mapCharacters: z.array(mapCharacterSchema).default([]),
   placedObjects: z.array(z.object({
     id: z.string().min(1),
     modelId: z.string().min(1),
@@ -136,4 +161,11 @@ export const createLevelSchema = z.object({
     scale: vector3Schema,
     isMap: z.boolean().optional(),
   })).default([]),
+  maxPlayers: z.number().int().min(1).max(200).default(50),
+  publishedAt: z.string().nullable().optional(),
+  archivedAt: z.string().nullable().optional(),
+});
+
+export const updateLevelStatusSchema = z.object({
+  status: z.enum(["draft", "published", "archived"]),
 });
