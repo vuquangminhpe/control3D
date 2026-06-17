@@ -9,6 +9,7 @@ Monorepo for the 3D Object Management MVP.
 
 2. Start app:
    - `yarn dev`
+   - Open `http://localhost:8878`
 
 3. Local database:
    - SQLite file is created automatically at:
