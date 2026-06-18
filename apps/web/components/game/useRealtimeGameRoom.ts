@@ -13,6 +13,7 @@ import type { GameChatMessage } from "./GameChatPanel";
 
 type UseRealtimeGameRoomInput = {
   active: boolean;
+  spectator?: boolean;
   mapId: string | null | undefined;
   playerPosition: [number, number, number];
   playerVelocity: [number, number, number];
@@ -72,6 +73,7 @@ function presenceChanged(current: PresencePayload, previous: PresencePayload) {
 
 export function useRealtimeGameRoom({
   active,
+  spectator = false,
   mapId,
   playerPosition,
   playerVelocity,
@@ -201,7 +203,7 @@ export function useRealtimeGameRoom({
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ characterId }),
+            body: JSON.stringify({ characterId, spectator }),
           },
         );
         const payload = await response.json().catch(() => null);
@@ -221,6 +223,10 @@ export function useRealtimeGameRoom({
           reconnectAttempts = 0;
           setConnected(true);
           lastSentPresenceRef.current = null;
+          if (spectator) {
+            clearHeartbeat();
+            return;
+          }
           const sendPresence = () => {
             if (!nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
             const payload: PresencePayload = {
@@ -265,8 +271,8 @@ export function useRealtimeGameRoom({
           const serverEvent = parsedEvent.data;
 
           if (serverEvent.type === "room:joined") {
-            selfUserIdRef.current = serverEvent.payload.self.userId;
-            setSelfDisplayName(serverEvent.payload.self.displayName);
+            selfUserIdRef.current = serverEvent.payload.self?.userId ?? null;
+            setSelfDisplayName(serverEvent.payload.self?.displayName ?? "Admin preview");
             replaceRemotePlayers(serverEvent.payload.players);
             setMessages(serverEvent.payload.messages);
             return;
@@ -353,7 +359,7 @@ export function useRealtimeGameRoom({
       setWorldSnapshot(null);
       setConnected(false);
     };
-  }, [active, characterId, mapId, removeRemotePlayer, replaceRemotePlayers, updateRemotePlayer]);
+  }, [active, characterId, mapId, removeRemotePlayer, replaceRemotePlayers, spectator, updateRemotePlayer]);
 
   const sendMessage = useCallback(async (body: string) => {
     const socket = socketRef.current;

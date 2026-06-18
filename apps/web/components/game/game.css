@@ -2891,6 +2891,201 @@
   text-transform: uppercase;
 }
 
+.runtime-perf-overlay {
+  position: absolute;
+  right: 18px;
+  top: 92px;
+  z-index: 18;
+  display: grid;
+  gap: 7px;
+  width: 210px;
+  padding: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 8px;
+  background: rgba(8, 12, 28, 0.78);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
+  color: #dff7ff;
+  font-size: 10px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.runtime-perf-overlay header,
+.runtime-perf-overlay div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.runtime-perf-overlay header {
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: #00ffc4;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.runtime-perf-overlay span {
+  color: rgba(223, 247, 255, 0.58);
+}
+
+.runtime-perf-overlay strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-perf-overlay em {
+  color: rgba(125, 211, 252, 0.72);
+  font-size: 9px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.admin-preview-ribbon {
+  position: absolute;
+  left: 24px;
+  top: 112px;
+  z-index: 16;
+  display: grid;
+  gap: 4px;
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 255, 196, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 12, 28, 0.78);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.34);
+  color: #dff7ff;
+  pointer-events: none;
+}
+
+.admin-preview-ribbon span {
+  color: #00ffc4;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.admin-preview-ribbon strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-preview-ribbon small {
+  color: rgba(223, 247, 255, 0.68);
+  font-size: 11px;
+}
+
+.spectator-player-panel {
+  position: absolute;
+  left: 24px;
+  bottom: 26px;
+  z-index: 17;
+  display: grid;
+  gap: 8px;
+  width: min(310px, calc(100vw - 48px));
+  max-height: min(420px, calc(100vh - 220px));
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 8px;
+  background: rgba(9, 13, 26, 0.84);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+  color: #dff7ff;
+  pointer-events: auto;
+}
+
+.spectator-player-panel header,
+.spectator-player-panel button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spectator-player-panel header {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.spectator-player-panel header span {
+  color: #00ffc4;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.spectator-player-panel header strong {
+  color: rgba(223, 247, 255, 0.74);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.spectator-player-panel button {
+  min-height: 48px;
+  padding: 9px 10px;
+  color: rgba(223, 247, 255, 0.74);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.spectator-player-panel button.active {
+  color: #ffffff;
+  border-color: rgba(0, 255, 196, 0.54);
+  background: rgba(0, 255, 196, 0.12);
+}
+
+.spectator-player-panel button span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.spectator-player-panel button strong,
+.spectator-player-panel button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spectator-player-panel button strong {
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.spectator-player-panel button small,
+.spectator-player-panel button em {
+  color: rgba(223, 247, 255, 0.58);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.spectator-player-list {
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.spectator-player-list p {
+  margin: 4px 2px;
+  color: rgba(223, 247, 255, 0.58);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 @keyframes npcPromptPulse {
   0%, 100% {
     transform: scale(1);

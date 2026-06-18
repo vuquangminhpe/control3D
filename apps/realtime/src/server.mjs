@@ -24,6 +24,7 @@ const ENEMY_ATTACK_RADIUS = Number(process.env.CONTROL3D_ENEMY_ATTACK_RADIUS || 
 const ENEMY_ATTACK_COOLDOWN_MS = Number(process.env.CONTROL3D_ENEMY_ATTACK_COOLDOWN_MS || 1100);
 const COMBAT_ATTACK_COOLDOWN_MS = Number(process.env.CONTROL3D_COMBAT_ATTACK_COOLDOWN_MS || 420);
 const PLAYER_MAX_HP = Number(process.env.CONTROL3D_PLAYER_MAX_HP || 100);
+const PLAYER_HIT_RADIUS = 0.5;
 const REALTIME_ACTION_TRIGGERS = new Set([
   "none",
   "attack",
@@ -70,6 +71,9 @@ const roomMessages = new Map();
  *   presenceSeq: number;
  *   position: [number, number, number];
  *   velocity: [number, number, number];
+ *   height: number;
+ *   radius: number;
+ *   hitRadius: number;
  *   hp: number;
  *   maxHp: number;
  *   actionState: string;
@@ -96,6 +100,20 @@ const roomMessages = new Map();
  *   playerSpawn: [number, number, number];
  *   robotSpawn: [number, number, number];
  *   zombieSpawns: RuntimeZombieSpawn[];
+ *   mapCharacters?: Array<{
+ *     id: string;
+ *     characterId: string;
+ *     modelId: string;
+ *     name: string;
+ *     fileUrl: string;
+ *     format?: string;
+ *     role: "playable" | "npc" | "story_actor" | "boss";
+ *     displayLabel?: string | null;
+ *     spawnPosition?: [number, number, number] | null;
+ *     previewPosition?: [number, number, number] | null;
+ *     storyEnabled?: boolean;
+ *     sortOrder?: number;
+ *   }>;
  * }} RealtimeMapRuntime
  *
  * @typedef {{
@@ -113,6 +131,11 @@ const roomMessages = new Map();
  * @typedef {{
  *   id: string;
  *   kind: string;
+ *   characterId: string | null;
+ *   modelId: string | null;
+ *   name: string | null;
+ *   fileUrl: string | null;
+ *   format: string | null;
  *   position: [number, number, number];
  *   actionState: string;
  *   seq: number;
@@ -239,6 +262,20 @@ function sanitizeCharacterActions(value) {
     .slice(0, 40);
 }
 
+function finiteVector3(value, fallback = [0, 0, 0]) {
+  if (!Array.isArray(value) || value.length !== 3) return fallback;
+  const vector = value.map((entry) => Number(entry));
+  return vector.every((entry) => Number.isFinite(entry))
+    ? /** @type {[number, number, number]} */ (vector)
+    : fallback;
+}
+
+function nullableText(value, maxLength) {
+  return typeof value === "string" && value.trim()
+    ? value.trim().slice(0, maxLength)
+    : null;
+}
+
 function getRoom(mapId) {
   let room = rooms.get(mapId);
   if (!room) {
@@ -356,9 +393,19 @@ function getEnemyStats(type) {
     : { hp: 40, maxHp: 40 };
 }
 
+function getEnemyDimensions(type) {
+  return type === "zombie_fantasy"
+    ? { height: 2.05, radius: 0.48, hitRadius: 1.05 }
+    : { height: 1.8, radius: 0.42, hitRadius: 0.75 };
+}
+
 function fallbackZombieSpawns(runtime) {
   if (Array.isArray(runtime.zombieSpawns) && runtime.zombieSpawns.length > 0) {
-    return runtime.zombieSpawns;
+    return runtime.zombieSpawns.map((spawn, index) => ({
+      id: spawn.id || `e${index + 1}`,
+      type: spawn.type === "zombie_fantasy" ? "zombie_fantasy" : "zombie_low",
+      position: finiteVector3(spawn.position, [0, 0, 0]),
+    }));
   }
   const spawn = Array.isArray(runtime.playerSpawn) ? runtime.playerSpawn : [0, 1.5, 0];
   return [
@@ -380,14 +427,66 @@ function fallbackZombieSpawns(runtime) {
   ];
 }
 
+function runtimeNpcActors(runtime) {
+  const actors = Array.isArray(runtime.mapCharacters)
+    ? runtime.mapCharacters
+        .filter((actor) => {
+          const role = actor?.role;
+          return (
+            role === "npc" ||
+            role === "story_actor" ||
+            role === "boss" ||
+            actor?.storyEnabled === true
+          );
+        })
+        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+        .map((actor, index) => ({
+          id: nullableText(actor.id, 120) || `npc-${index + 1}`,
+          kind: nullableText(actor.role, 40) || "npc",
+          characterId: nullableText(actor.characterId, 120),
+          modelId: nullableText(actor.modelId, 120),
+          name: nullableText(actor.displayLabel, 120) || nullableText(actor.name, 120),
+          fileUrl: nullableText(actor.fileUrl, 2000),
+          format: nullableText(actor.format, 20),
+          position: finiteVector3(
+            actor.spawnPosition ?? actor.previewPosition,
+            Array.isArray(runtime.robotSpawn) ? finiteVector3(runtime.robotSpawn) : [0, 0, 0],
+          ),
+          actionState: "idle",
+          seq: 0,
+        }))
+    : [];
+
+  if (actors.length > 0) return actors;
+
+  return [
+    {
+      id: "robot",
+      kind: "robot",
+      characterId: null,
+      modelId: null,
+      name: "Robot",
+      fileUrl: null,
+      format: null,
+      position: Array.isArray(runtime.robotSpawn) ? finiteVector3(runtime.robotSpawn) : [0, 0, 0],
+      actionState: "idle",
+      seq: 0,
+    },
+  ];
+}
+
 function createWorldSnapshot(mapId, runtime) {
   const enemies = fallbackZombieSpawns(runtime).map((spawn, index) => {
     const stats = getEnemyStats(spawn.type);
+    const dimensions = getEnemyDimensions(spawn.type);
     return {
       id: spawn.id || `e${index + 1}`,
       type: spawn.type,
       position: spawn.position,
       velocity: [0, 0, 0],
+      height: dimensions.height,
+      radius: dimensions.radius,
+      hitRadius: dimensions.hitRadius,
       hp: stats.hp,
       maxHp: stats.maxHp,
       actionState: "idle",
@@ -401,15 +500,7 @@ function createWorldSnapshot(mapId, runtime) {
     serverTimeMs: Date.now(),
     tick: 0,
     enemies,
-    npcs: [
-      {
-        id: "robot",
-        kind: "robot",
-        position: Array.isArray(runtime.robotSpawn) ? runtime.robotSpawn : [0, 0, 0],
-        actionState: "idle",
-        seq: 0,
-      },
-    ],
+    npcs: runtimeNpcActors(runtime),
   };
 }
 
@@ -447,6 +538,7 @@ async function getRoomWorld(mapId, isAdminPreview) {
 }
 
 function toPresence(client) {
+  if (client.spectator) return null;
   return {
     id: client.id,
     userId: client.userId,
@@ -504,6 +596,7 @@ function broadcast(mapId, type, payload, exceptClient) {
 }
 
 function markPresenceDirty(client) {
+  if (client.spectator) return;
   let dirtyRoom = dirtyPresenceByRoom.get(client.mapId);
   if (!dirtyRoom) {
     dirtyRoom = new Set();
@@ -521,8 +614,11 @@ function flushPresenceUpdates() {
     }
 
     for (const client of dirtyClients) {
-      if (client.closed || !room.has(client)) continue;
-      broadcast(mapId, "presence:update", toPresence(client), client);
+      if (client.closed || client.spectator || !room.has(client)) continue;
+      const presence = toPresence(client);
+      if (presence) {
+        broadcast(mapId, "presence:update", presence, client);
+      }
     }
 
     dirtyPresenceByRoom.delete(mapId);
@@ -532,7 +628,7 @@ function flushPresenceUpdates() {
 function getNearestPlayer(room, enemy) {
   let nearest = null;
   for (const client of room) {
-    if (client.closed || client.hp <= 0) continue;
+    if (client.closed || client.spectator || client.hp <= 0) continue;
     const dx = client.position[0] - enemy.position[0];
     const dz = client.position[2] - enemy.position[2];
     const distance = Math.hypot(dx, dz);
@@ -592,7 +688,7 @@ function simulateWorlds(deltaSeconds) {
         continue;
       }
 
-      if (nearest.distance <= ENEMY_ATTACK_RADIUS) {
+      if (nearest.distance <= ENEMY_ATTACK_RADIUS + PLAYER_HIT_RADIUS + (enemy.radius ?? 0.42)) {
         if (applyEnemyDamage(mapId, enemy, nearest.client, now)) {
           changed = true;
         }
@@ -607,7 +703,8 @@ function simulateWorlds(deltaSeconds) {
 
       const length = Math.max(nearest.distance, 0.0001);
       const speed = enemy.type === "zombie_fantasy" ? 3 : 2;
-      const step = Math.min(nearest.distance - ENEMY_ATTACK_RADIUS, speed * deltaSeconds);
+      const stopDistance = ENEMY_ATTACK_RADIUS + PLAYER_HIT_RADIUS + (enemy.radius ?? 0.42);
+      const step = Math.min(nearest.distance - stopDistance, speed * deltaSeconds);
       const velocityX = (nearest.dx / length) * speed;
       const velocityZ = (nearest.dz / length) * speed;
       enemy.position = [
@@ -691,7 +788,10 @@ function applyCombatAttack(client, payload) {
     const dx = enemy.position[0] - client.position[0];
     const dz = enemy.position[2] - client.position[2];
     const distance = Math.hypot(dx, dz);
-    const targetRadius = enemy.type === "zombie_fantasy" ? 1.35 : 0.75;
+    const targetRadius =
+      typeof enemy.hitRadius === "number" && Number.isFinite(enemy.hitRadius)
+        ? enemy.hitRadius
+        : getEnemyDimensions(enemy.type).hitRadius;
     if (distance > profile.reach + targetRadius) continue;
     const length = Math.max(distance, 0.0001);
     const dot = (dx / length) * direction[0] + (dz / length) * direction[2];
@@ -777,6 +877,11 @@ function sanitizeNullableText(value, maxLength) {
 function handleClientEvent(client, event) {
   if (!event || typeof event !== "object" || typeof event.type !== "string") {
     sendError(client, "invalid_event", "Invalid realtime event.");
+    return;
+  }
+
+  if (client.spectator && (event.type === "presence:update" || event.type === "combat:attack")) {
+    sendError(client, "spectator_read_only", "Spectator preview cannot control gameplay.");
     return;
   }
 
@@ -939,7 +1044,7 @@ function closeClient(client, reason = "closed") {
   if (client.closed) return;
   client.closed = true;
   const room = rooms.get(client.mapId);
-  if (room?.delete(client)) {
+  if (room?.delete(client) && !client.spectator) {
     broadcast(client.mapId, "presence:left", { id: client.id, userId: client.userId });
   }
   if (room && room.size === 0) {
@@ -1016,6 +1121,7 @@ async function acceptWebSocket(request, socket, head) {
     characterName: payload.characterName ?? null,
     characterFileUrl: payload.characterFileUrl ?? null,
     characterActions: sanitizeCharacterActions(payload.characterActions),
+    spectator: payload.spectator === true && payload.isAdmin === true,
     presenceSeq: 0,
     position: [0, 0, 0],
     velocity: [0, 0, 0],
@@ -1032,11 +1138,11 @@ async function acceptWebSocket(request, socket, head) {
     frameBuffer: Buffer.alloc(0),
     closed: false,
   };
-  const otherPlayers = Array.from(room).map(toPresence);
+  const otherPlayers = Array.from(room).map(toPresence).filter(Boolean);
   room.add(client);
 
   sendEvent(client, "room:joined", {
-    self: toPresence(client),
+    self: client.spectator ? null : toPresence(client),
     players: otherPlayers,
     messages: getRecentMessages(client.mapId),
   });

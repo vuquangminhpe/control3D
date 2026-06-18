@@ -41,6 +41,35 @@ const emptyForm: CharacterFormState = {
   format: "",
 };
 
+function characterReadiness(character: GameCharacterRecord) {
+  if (!character.fileUrl?.trim()) {
+    return {
+      tone: "blocked" as const,
+      label: "blocked",
+      detail: "Missing runtime file URL",
+    };
+  }
+  if (!character.format?.trim()) {
+    return {
+      tone: "review" as const,
+      label: "review",
+      detail: "Format missing for preload/fallback",
+    };
+  }
+  if (!character.modelId) {
+    return {
+      tone: "review" as const,
+      label: "review",
+      detail: "Manual URL without asset link",
+    };
+  }
+  return {
+    tone: "ready" as const,
+    label: "ready",
+    detail: "Ready for map assignment",
+  };
+}
+
 export function AdminCharactersClient() {
   const [admin, setAdmin] = useState<AdminMePayload["admin"] | null>(null);
   const [characters, setCharacters] = useState<GameCharacterRecord[]>([]);
@@ -58,6 +87,11 @@ export function AdminCharactersClient() {
 
   const activeCount = useMemo(
     () => characters.filter((character) => character.isActive).length,
+    [characters],
+  );
+
+  const reviewCount = useMemo(
+    () => characters.filter((character) => characterReadiness(character).tone !== "ready").length,
     [characters],
   );
 
@@ -183,14 +217,18 @@ export function AdminCharactersClient() {
   }
 
   return (
-    <main>
-      <section className="page-header">
+    <main className="admin-console-page">
+      <section className="admin-console-hero">
         <div>
           <span className="stat-label">ADMIN CHARACTERS</span>
-          <h1>Gameplay character registry</h1>
-          <p className="inline-text">{admin.email}</p>
+          <h1>Character registry</h1>
+          <p>Register playable, NPC, story, and boss assets before assigning them to public maps.</p>
         </div>
-        <div className="inline-actions">
+        <div className="admin-hero-meta">
+          <span>{admin.email}</span>
+          <strong>{activeCount} active</strong>
+        </div>
+        <div className="inline-actions admin-hero-actions">
           <button className="button secondary" onClick={() => void load()} type="button">
             Refresh
           </button>
@@ -200,18 +238,22 @@ export function AdminCharactersClient() {
         </div>
       </section>
 
-      <section className="stat-grid grid grid-3">
-        <div className="card">
+      <section className="admin-stat-strip">
+        <div>
           <span className="stat-label">Registered</span>
           <strong className="stat-value">{characters.length}</strong>
         </div>
-        <div className="card">
+        <div>
           <span className="stat-label">Active</span>
           <strong className="stat-value">{activeCount}</strong>
         </div>
-        <div className="card">
+        <div>
           <span className="stat-label">Character assets</span>
           <strong className="stat-value">{characterModels.length}</strong>
+        </div>
+        <div>
+          <span className="stat-label">Needs review</span>
+          <strong className="stat-value">{reviewCount}</strong>
         </div>
       </section>
 
@@ -220,8 +262,11 @@ export function AdminCharactersClient() {
       ) : null}
 
       <section className="admin-split-grid">
-        <form className="card admin-form-panel" onSubmit={submit}>
-          <span className="stat-label">Register character</span>
+        <form className="admin-console-panel admin-form-panel" onSubmit={submit}>
+          <div className="admin-panel-title">
+            <span className="stat-label">Register character</span>
+            <strong>Runtime intake</strong>
+          </div>
           <label className="field">
             Source asset
             <select
@@ -272,19 +317,33 @@ export function AdminCharactersClient() {
             />
           </label>
 
+          <div className="asset-readiness-note">
+            <strong>Budget rule</strong>
+            <span>Characters without file URL are blocked from clean map publishing.</span>
+          </div>
+
           <button className="button" disabled={isSubmitting} type="submit">
             {isSubmitting ? "Registering..." : "Register character"}
           </button>
         </form>
 
-        <section className="card admin-list-panel">
-          <span className="stat-label">Registered characters</span>
+        <section className="admin-console-panel admin-list-panel">
+          <div className="admin-panel-title">
+            <span className="stat-label">Registered characters</span>
+            <strong>{characters.length} records</strong>
+          </div>
           {characters.map((character) => (
             <article className="admin-character-row" key={character.id}>
               <div>
                 <strong>{character.name}</strong>
                 <small>{character.fileUrl}</small>
               </div>
+              <span className={`runtime-score ${characterReadiness(character).tone}`}>
+                {characterReadiness(character).label}
+              </span>
+              <small className="character-readiness-detail">
+                {characterReadiness(character).detail}
+              </small>
               <span className={`status-pill ${character.isActive ? "published" : "archived"}`}>
                 {character.isActive ? "active" : "archived"}
               </span>

@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 
 import { getLevelById, setLevelStatus } from "@/lib/model-store";
 import { requireAdmin } from "@/lib/auth/admin-guard";
+import { evaluateRuntimeBudget } from "@/lib/runtime-budget";
 import { ok, fail } from "@/lib/response";
 
 type Context = {
@@ -16,11 +17,11 @@ export async function POST(request: Request, { params }: Context) {
   const { id } = await params;
   const current = await getLevelById(id);
   if (!current) return fail("Map not found", 404);
-  if (!current.mapModelUrl || !current.playerSpawn) {
-    return fail("Map needs a model and player spawn before publishing", 422);
-  }
-  if (!current.mapCharacters.some((entry) => entry.role === "playable" && entry.isDefault)) {
-    return fail("Map needs one default playable character before publishing", 422);
+
+  const budget = evaluateRuntimeBudget(current);
+  const blockingIssue = budget.issues.find((entry) => entry.severity === "error");
+  if (blockingIssue) {
+    return fail(`${blockingIssue.title}: ${blockingIssue.detail}`, 422);
   }
 
   const map = await setLevelStatus(id, "published");

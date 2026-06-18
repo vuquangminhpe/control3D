@@ -342,6 +342,58 @@ function CharacterSelectPanel({
   );
 }
 
+function SpectatorPlayerPanel({
+  connected,
+  focusPlayerId,
+  onFocusPlayer,
+  players,
+}: {
+  connected: boolean;
+  focusPlayerId: string | null;
+  onFocusPlayer: (playerId: string | null) => void;
+  players: RemotePresencePlayer[];
+}) {
+  return (
+    <aside className="spectator-player-panel">
+      <header>
+        <span>Observer</span>
+        <strong>{connected ? `${players.length} online` : "connecting"}</strong>
+      </header>
+      <button
+        className={!focusPlayerId ? "active" : ""}
+        onClick={() => onFocusPlayer(null)}
+        type="button"
+      >
+        <span>
+          <strong>Overview</strong>
+          <small>Whole map camera</small>
+        </span>
+        <em>View</em>
+      </button>
+      <div className="spectator-player-list">
+        {players.length ? (
+          players.map((player) => (
+            <button
+              className={focusPlayerId === player.id ? "active" : ""}
+              key={player.id}
+              onClick={() => onFocusPlayer(player.id)}
+              type="button"
+            >
+              <span>
+                <strong>{player.displayName}</strong>
+                <small>{player.characterName ?? "No character name"}</small>
+              </span>
+              <em>{player.actionState || "idle"}</em>
+            </button>
+          ))
+        ) : (
+          <p>No active players in this room.</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function writeCharacterActionsToCustomProps(
   customProps: AssetLibraryItem["customProps"],
   actions: CharacterActionLink[],
@@ -2859,8 +2911,18 @@ function AssetManagerPanel() {
   );
 }
 
-export function GameWorkbench() {
-  const [activeTab, setActiveTab] = useState<WorkbenchTab>("maps");
+type GameWorkbenchProps = {
+  adminPreview?: boolean;
+  initialMapId?: string | null;
+};
+
+export function GameWorkbench({
+  adminPreview = false,
+  initialMapId = null,
+}: GameWorkbenchProps = {}) {
+  const [activeTab, setActiveTab] = useState<WorkbenchTab>(
+    adminPreview || initialMapId ? "play" : "maps",
+  );
   log3DDebug(
     "game-workbench-render",
     "GameWorkbench render",
@@ -2872,6 +2934,7 @@ export function GameWorkbench() {
   const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
   const activeLevel = useGameStore((state) => state.activeLevel);
+  const savedLevels = useGameStore((state) => state.savedLevels);
   const playerPosition = useGameStore((state) => state.playerPosition);
   const playerVelocity = useGameStore((state) => state.playerVelocity);
   const playerActionState = useGameStore((state) => state.playerActionState);
@@ -2889,6 +2952,7 @@ export function GameWorkbench() {
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
   const [pointBalance, setPointBalance] = useState<number | null>(null);
   const [characterSelectError, setCharacterSelectError] = useState<string | null>(null);
+  const [spectatorFocusPlayerId, setSpectatorFocusPlayerId] = useState<string | null>(null);
   const allowRealtimeFallback =
     process.env.NODE_ENV !== "production" &&
     process.env.NEXT_PUBLIC_CONTROL3D_ALLOW_REALTIME_FALLBACK !== "false";
@@ -3032,7 +3096,8 @@ export function GameWorkbench() {
   }, [activeLevel]);
 
   const realtimeRoom = useRealtimeGameRoom({
-    active: activeTab === "play" && selectedCharacterCanUse,
+    active: activeTab === "play" && (adminPreview || selectedCharacterCanUse),
+    spectator: adminPreview,
     mapId: activeLevel?.id,
     playerPosition,
     playerVelocity,
@@ -3199,6 +3264,14 @@ export function GameWorkbench() {
   }, [loadSavedLevels, loadWeaponLoadouts]);
 
   useEffect(() => {
+    if (!initialMapId) return;
+    const selected = savedLevels.find((level) => level.id === initialMapId);
+    if (!selected || activeLevel?.id === selected.id) return;
+    setActiveLevel(selected.id);
+    setActiveTab("play");
+  }, [activeLevel?.id, initialMapId, savedLevels, setActiveLevel]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadIdentity() {
@@ -3261,6 +3334,7 @@ export function GameWorkbench() {
   useEffect(() => {
     if (
       !allowRealtimeFallback ||
+      adminPreview ||
       realtimeRoom.connected ||
       activeTab !== "play" ||
       !activeLevel?.id ||
@@ -3292,6 +3366,7 @@ export function GameWorkbench() {
   }, [
     activeLevel?.id,
     activeTab,
+    adminPreview,
     allowRealtimeFallback,
     loadChatMessages,
     realtimeRoom.connected,
@@ -3411,6 +3486,15 @@ export function GameWorkbench() {
     : allowRealtimeFallback
       ? sendChatMessage
       : sendRealtimeRequiredMessage;
+
+  useEffect(() => {
+    if (
+      spectatorFocusPlayerId &&
+      !effectiveRemotePlayers.some((player) => player.id === spectatorFocusPlayerId)
+    ) {
+      setSpectatorFocusPlayerId(null);
+    }
+  }, [effectiveRemotePlayers, spectatorFocusPlayerId]);
 
   useEffect(() => {
     if (activeLevel) {
@@ -3535,21 +3619,42 @@ export function GameWorkbench() {
             playerActions={selectedPlayerActions}
             remotePlayers={effectiveRemotePlayers}
             worldSnapshot={effectiveWorldSnapshot}
+            showRuntimeStats={isAdminViewer || adminPreview}
+            spectatorFocusPlayerId={spectatorFocusPlayerId}
+            spectatorMode={adminPreview}
             onCombatAttack={
-              realtimeRoom.connected ? realtimeRoom.sendCombatAttack : undefined
+              realtimeRoom.connected && !adminPreview ? realtimeRoom.sendCombatAttack : undefined
             }
           />
-          <HUD />
-          <DialogueSystem />
-          <CharacterSelectPanel
-            balance={pointBalance}
-            characters={playableCharacters}
-            error={characterSelectError}
-            onBuy={buySelectedCharacter}
-            onSelect={setSelectedCharacterId}
-            selectedCharacterId={selectedCharacterId}
-          />
-          {isAdminViewer ? (
+          {adminPreview ? (
+            <aside className="admin-preview-ribbon">
+              <span>Admin preview</span>
+              <strong>{activeLevel?.name ?? "Map"}</strong>
+              <small>Spectator camera for live user gameplay on this map.</small>
+            </aside>
+          ) : null}
+          {adminPreview ? (
+            <SpectatorPlayerPanel
+              connected={realtimeRoom.connected}
+              focusPlayerId={spectatorFocusPlayerId}
+              onFocusPlayer={setSpectatorFocusPlayerId}
+              players={effectiveRemotePlayers}
+            />
+          ) : (
+            <>
+              <HUD />
+              <DialogueSystem />
+              <CharacterSelectPanel
+                balance={pointBalance}
+                characters={playableCharacters}
+                error={characterSelectError}
+                onBuy={buySelectedCharacter}
+                onSelect={setSelectedCharacterId}
+                selectedCharacterId={selectedCharacterId}
+              />
+            </>
+          )}
+          {isAdminViewer && !adminPreview ? (
             <ManualActionConfigPanel
               actions={selectedPlayerActions}
               activeActionId={activeGameplayActionId}

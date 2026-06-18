@@ -10,6 +10,7 @@ import type { RealtimeCombatAttack, RealtimeEnemyState } from "@control3d/shared
 import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { log3DDebug } from "@/lib/3d/debug";
+import { getEnemyDimensions, getPlayerDimensions } from "./runtimeDimensions";
 
 const BOW_MIN_SPEED = 18;
 const BOW_MAX_SPEED = 46;
@@ -169,7 +170,7 @@ class AnimationErrorBoundary extends React.Component<AnimationErrorBoundaryProps
 
 function CustomPlayerVisual({ src, playerActions = [] }: { src: string; playerActions?: any[] }) {
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
-  const fitHeight = 1.85 * mapScaleRatio;
+  const dimensions = getPlayerDimensions(mapScaleRatio);
   const activeGameplayActionUrl = useGameStore((state) => state.activeGameplayActionUrl);
 
   const idleAction = useMemo(() => {
@@ -199,18 +200,32 @@ function CustomPlayerVisual({ src, playerActions = [] }: { src: string; playerAc
   });
 
   log3DDebug(
-    `player-visual:${src}:${fitHeight}:${animationUrl ?? "none"}`,
+    `player-visual:${src}:${dimensions.visualHeight}:${animationUrl ?? "none"}`,
     "Player visual fit",
-    { src, mapScaleRatio, fitHeight, animationUrl },
+    { src, mapScaleRatio, fitHeight: dimensions.visualHeight, animationUrl },
     { once: true },
   );
 
   return (
     <group position={[0, 0, 0]}>
-      <Suspense fallback={null}>
+      <Suspense
+        fallback={
+          <mesh castShadow position={[0, dimensions.visualHeight / 2, 0]}>
+            <capsuleGeometry
+              args={[
+                dimensions.bodyRadius,
+                dimensions.visualHeight - dimensions.bodyRadius * 2,
+                6,
+                12,
+              ]}
+            />
+            <meshStandardMaterial color="#7dd3fc" roughness={0.45} />
+          </mesh>
+        }
+      >
         <ModelLoader
           debugLabel="runtime-player-visual-main"
-          fitHeight={fitHeight}
+          fitHeight={dimensions.visualHeight}
           groundToY={0}
           src={src}
           onSceneReady={setModelScene}
@@ -275,6 +290,7 @@ export function Player({
   const spawnArrow = useGameStore((state) => state.spawnArrow);
   const playerCharacter = useGameStore((state) => state.activeLevel.playerCharacter);
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+  const playerDimensions = getPlayerDimensions(mapScaleRatio);
   const setPlayerActionState = useGameStore((state) => state.setPlayerActionState);
 
   // Local movement states
@@ -749,7 +765,7 @@ export function Player({
       const distance = toEnemy.length();
       const directionToEnemy = distance > 0 ? toEnemy.clone().normalize() : toEnemy;
       const isInsideArc = weaponForward.dot(directionToEnemy) >= minFacingDot;
-      const targetRadius = (enemy.type === "zombie_fantasy" ? 1.35 : 0.75) * mapScaleRatio;
+      const targetRadius = getEnemyDimensions(enemy.type, mapScaleRatio).hitRadius;
       const hitDistance = (weaponHitbox.reach + weaponHitbox.radius) * mapScaleRatio + targetRadius;
 
       if (isInsideArc && distance <= hitDistance && (!closestHit || distance < closestHit.distance)) {
@@ -1007,8 +1023,8 @@ export function Player({
       mapScaleRatio,
       initialPosition: initialPlayerPositionRef.current,
       playerCharacter: playerCharacter?.fileUrl,
-      capsuleArgs: [0.7 * mapScaleRatio, 0.4 * mapScaleRatio],
-      capsulePos: [0, 1.1 * mapScaleRatio, 0],
+      capsuleArgs: [playerDimensions.capsuleHalfHeight, playerDimensions.bodyRadius],
+      capsulePos: [0, playerDimensions.capsuleCenterY, 0],
     },
     { intervalMs: 1000 },
   );
@@ -1023,7 +1039,10 @@ export function Player({
       type="dynamic"
       canSleep={false}
     >
-      <CapsuleCollider args={[0.7 * mapScaleRatio, 0.4 * mapScaleRatio]} position={[0, 1.1 * mapScaleRatio, 0]} />
+      <CapsuleCollider
+        args={[playerDimensions.capsuleHalfHeight, playerDimensions.bodyRadius]}
+        position={[0, playerDimensions.capsuleCenterY, 0]}
+      />
       <CuboidCollider
         args={[0.32 * mapScaleRatio, 0.08 * mapScaleRatio, 0.32 * mapScaleRatio]}
         position={[0, 0.1 * mapScaleRatio, 0]}

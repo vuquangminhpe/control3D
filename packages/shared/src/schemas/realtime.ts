@@ -67,6 +67,9 @@ export const realtimeEnemyStateSchema = z.object({
   type: z.enum(["zombie_low", "zombie_fantasy"]),
   position: realtimeVector3Schema,
   velocity: realtimeVector3Schema.default([0, 0, 0]),
+  height: z.number().positive().default(1.8),
+  radius: z.number().positive().default(0.42),
+  hitRadius: z.number().positive().default(0.75),
   hp: z.number().int().nonnegative(),
   maxHp: z.number().int().positive(),
   actionState: z.string().trim().max(40),
@@ -77,6 +80,11 @@ export const realtimeEnemyStateSchema = z.object({
 export const realtimeNpcStateSchema = z.object({
   id: z.string().min(1),
   kind: z.string().trim().max(40),
+  characterId: z.string().trim().max(120).nullable().default(null),
+  modelId: z.string().trim().max(120).nullable().default(null),
+  name: z.string().trim().max(120).nullable().default(null),
+  fileUrl: z.string().trim().max(2000).nullable().default(null),
+  format: z.string().trim().max(20).nullable().default(null),
   position: realtimeVector3Schema,
   actionState: z.string().trim().max(40),
   seq: z.number().int().nonnegative(),
@@ -120,7 +128,7 @@ export const realtimeServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("room:joined"),
     payload: z.object({
-      self: realtimePresencePlayerSchema,
+      self: realtimePresencePlayerSchema.nullable(),
       players: z.array(realtimePresencePlayerSchema),
       messages: z.array(chatMessageSchema),
     }),

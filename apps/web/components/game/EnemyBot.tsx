@@ -4,16 +4,31 @@ import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF, Html } from "@react-three/drei";
 import { RigidBody, CapsuleCollider } from "@react-three/rapier";
+import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
 import { useGameStore, type EnemyState } from "@/store/gameStore";
 import { getRenderableBounds } from "@/components/3d/ModelLoader";
+import { getEnemyDimensions, getNpcDimensions } from "./runtimeDimensions";
 
 // Helper to search and find proper animation clips
 function findClipByName(clips: THREE.AnimationClip[], keywords: string[]) {
   return clips.find((clip) => {
-    const name = clip.name.toLowerCase();
+    const name = clip.name.toLowerCase().replace(/[^a-z0-9]+/g, " ");
     return keywords.some((kw) => name.includes(kw));
   });
+}
+
+function pickEnemyClip(
+  clips: THREE.AnimationClip[],
+  primaryTerms: string[],
+  fallbackTerms: string[] = [],
+) {
+  return (
+    findClipByName(clips, primaryTerms) ||
+    findClipByName(clips, fallbackTerms) ||
+    clips[0] ||
+    null
+  );
 }
 
 type BotProps = {
@@ -37,7 +52,7 @@ export function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
 
   // Clone scene so multiple bots don't share the same scene instance
   const clonedScene = useMemo(() => {
-    const clone = scene.clone(true);
+    const clone = SkeletonUtils.clone(scene) as THREE.Group;
     clone.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
@@ -52,7 +67,7 @@ export function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
     });
     if (!bounds.isEmpty()) {
       const size = bounds.getSize(new THREE.Vector3());
-      const desiredHeight = (enemy.type === "zombie_fantasy" ? 2.3 : 1.8) * mapScaleRatio;
+      const desiredHeight = getEnemyDimensions(enemy.type, mapScaleRatio).visualHeight;
       if (size.y > 0.0001) {
         clone.scale.multiplyScalar(desiredHeight / size.y);
       }
@@ -71,11 +86,20 @@ export function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
 
   // Setup animations
   const clips = useMemo(() => {
-    const idle = findClipByName(animations, ["idle", "stand", "breath"]) || animations[0];
-    const run = findClipByName(animations, ["run", "walk", "chase", "move"]) || animations[0];
-    const attack = findClipByName(animations, ["attack", "bite", "strike", "hit"]) || animations[0];
-    const death = findClipByName(animations, ["death", "die", "fall"]) || animations[0];
-    return { idle, run, attack, death };
+    const idle = pickEnemyClip(animations, ["idle", "stand", "breath", "wait"], ["loop"]);
+    const run = pickEnemyClip(animations, ["run", "walk", "chase", "move", "crawl"], ["idle"]);
+    const attack = pickEnemyClip(
+      animations,
+      ["attack", "bite", "strike", "swipe", "punch", "slash"],
+      ["hit"],
+    );
+    const hit = pickEnemyClip(animations, ["hit", "hurt", "damage", "impact"], ["attack"]);
+    const death = pickEnemyClip(
+      animations,
+      ["death", "die", "dead", "fall", "knock"],
+      ["hit"],
+    );
+    return { idle, run, attack, hit, death };
   }, [animations]);
 
   const visualRef = useRef<THREE.Group>(null);
@@ -121,6 +145,8 @@ export function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
   useEffect(() => {
     if (enemy.isDead || enemy.health <= 0) {
       playClip(clips.death, false);
+    } else if (enemy.actionState === "hit") {
+      playClip(clips.hit, false);
     } else if (enemy.actionState === "attack") {
       playClip(clips.attack);
     } else if (enemy.actionState === "run") {
@@ -142,7 +168,7 @@ export function CharacterEnemyBot({ enemy, mapScaleRatio }: BotProps) {
   const modelRef = useRef<THREE.Group>(null);
   const lastAttackTimeRef = useRef<number>(0);
 
-  const modelHeight = (enemy.type === "zombie_fantasy" ? 2.3 : 1.8) * mapScaleRatio;
+  const dimensions = getEnemyDimensions(enemy.type, mapScaleRatio);
 
   useFrame(() => {
     const body = rigidBodyRef.current;
@@ -229,8 +255,8 @@ export function CharacterEnemyBot({ enemy, mapScaleRatio }: BotProps) {
       type="dynamic"
     >
       <CapsuleCollider
-        args={[(modelHeight / 2) - 0.2, 0.45 * mapScaleRatio]}
-        position={[0, (modelHeight / 2), 0]}
+        args={[dimensions.capsuleHalfHeight, dimensions.bodyRadius]}
+        position={[0, dimensions.capsuleCenterY, 0]}
       />
       <group ref={modelRef}>
         <Suspense fallback={null}>
@@ -239,7 +265,7 @@ export function CharacterEnemyBot({ enemy, mapScaleRatio }: BotProps) {
       </group>
       {/* Visual health bar overlay */}
       {!enemy.isDead && enemy.health < enemy.maxHealth && (
-        <Html position={[0, modelHeight + 0.3, 0]} center>
+        <Html position={[0, dimensions.labelY, 0]} center>
           <div className="enemy-health-bar-container">
             <div
               className="enemy-health-bar-fill"
@@ -256,7 +282,7 @@ export function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
   const { scene, animations } = useGLTF("/models/robot_tuan_tra_NPC.glb", "https://www.gstatic.com/draco/v1/decoders/");
 
   const clonedScene = useMemo(() => {
-    const clone = scene.clone(true);
+    const clone = SkeletonUtils.clone(scene) as THREE.Group;
     clone.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
@@ -271,7 +297,7 @@ export function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
     });
     if (!bounds.isEmpty()) {
       const size = bounds.getSize(new THREE.Vector3());
-      const desiredHeight = 1.85 * mapScaleRatio;
+      const desiredHeight = getNpcDimensions("npc", mapScaleRatio).visualHeight;
       if (size.y > 0.0001) {
         clone.scale.multiplyScalar(desiredHeight / size.y);
       }
@@ -296,7 +322,7 @@ export function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
     const mixer = new THREE.AnimationMixer(modelRef.current);
     mixerRef.current = mixer;
 
-    const idleClip = findClipByName(animations, ["idle", "stand", "breath", "patrol"]) || animations[0];
+    const idleClip = pickEnemyClip(animations, ["idle", "stand", "breath", "patrol", "wait"]);
     if (idleClip) {
       const action = mixer.clipAction(idleClip);
       action.play();
@@ -324,6 +350,7 @@ export function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
 export function NpcBot({ position, npcId }: { position: [number, number, number]; npcId: string }) {
   const [isNear, setIsNear] = useState(false);
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
+  const dimensions = getNpcDimensions("npc", mapScaleRatio);
 
   useFrame(() => {
     // Distance check to player
@@ -334,7 +361,7 @@ export function NpcBot({ position, npcId }: { position: [number, number, number]
 
     const activeDialogueNpcId = store.activeDialogueNpcId;
 
-    if (dist < 3.0 * mapScaleRatio && !activeDialogueNpcId) {
+    if (dist < (2.2 * mapScaleRatio + dimensions.hitRadius) && !activeDialogueNpcId) {
       setIsNear(true);
     } else {
       setIsNear(false);
@@ -342,12 +369,16 @@ export function NpcBot({ position, npcId }: { position: [number, number, number]
   });
 
   return (
-    <RigidBody type="fixed" colliders="cuboid" position={position}>
+    <RigidBody type="fixed" colliders={false} position={position}>
+      <CapsuleCollider
+        args={[dimensions.capsuleHalfHeight, dimensions.bodyRadius]}
+        position={[0, dimensions.capsuleCenterY, 0]}
+      />
       <Suspense fallback={null}>
         <NpcVisual mapScaleRatio={mapScaleRatio} />
       </Suspense>
       {isNear && (
-        <Html position={[0, 2.3 * mapScaleRatio, 0]} center>
+        <Html position={[0, dimensions.labelY, 0]} center>
           <div className="npc-prompt-bubble">
             Press <strong className="prompt-key">E</strong> to interact
           </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, useFrame, useLoader } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Physics, RigidBody } from "@react-three/rapier";
 import { OrbitControls, Html, Environment, Sky, Line, useGLTF } from "@react-three/drei";
 import { FBXLoader } from "three-stdlib";
@@ -26,6 +26,7 @@ import { ModelLoader } from "@/components/3d/ModelLoader";
 import { CharacterEnemyBot, CharacterEnemyVisual, NpcBot, NpcVisual } from "./EnemyBot";
 import { preload3DModel } from "@/hooks/use3DModel";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
+import { getEnemyDimensions, getNpcDimensions, getPlayerDimensions } from "./runtimeDimensions";
 
 export type RemotePresencePlayer = {
   id: string;
@@ -130,6 +131,113 @@ function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject
   );
 }
 
+function SpectatorCameraController({
+  controlsRef,
+  focusPlayerId,
+  mapScaleRatio,
+  players,
+  worldSnapshot,
+}: {
+  controlsRef: React.MutableRefObject<any>;
+  focusPlayerId: string | null;
+  mapScaleRatio: number;
+  players: RemotePresencePlayer[];
+  worldSnapshot: RealtimeWorldSnapshot | null;
+}) {
+  const { camera } = useThree();
+  const targetRef = useRef(new THREE.Vector3(0, 1.5, 0));
+  const initializedRef = useRef(false);
+
+  const overview = useMemo(() => {
+    const points = [
+      ...players.map((player) => player.position),
+      ...(worldSnapshot?.enemies ?? []).map((enemy) => enemy.position),
+      ...(worldSnapshot?.npcs ?? []).map((npc) => npc.position),
+    ];
+    if (!points.length) return { center: new THREE.Vector3(0, 1.5, 0), radius: 12 * mapScaleRatio };
+
+    const bounds = new THREE.Box3();
+    for (const point of points) {
+      bounds.expandByPoint(new THREE.Vector3(point[0], point[1], point[2]));
+    }
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const radius = Math.max(10 * mapScaleRatio, size.length() * 0.56);
+    center.y += 1.2 * mapScaleRatio;
+    return { center, radius };
+  }, [mapScaleRatio, players, worldSnapshot]);
+
+  useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+    const distance = Math.max(14 * mapScaleRatio, overview.radius * 1.7);
+    camera.position.set(
+      overview.center.x + distance * 0.45,
+      overview.center.y + distance * 0.85,
+      overview.center.z + distance * 0.8,
+    );
+    targetRef.current.copy(overview.center);
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(overview.center);
+      controlsRef.current.update();
+    }
+  }, [camera, controlsRef, mapScaleRatio, overview.center, overview.radius]);
+
+  useFrame((_, delta) => {
+    const focusedPlayer = focusPlayerId
+      ? players.find((player) => player.id === focusPlayerId)
+      : null;
+    const nextTarget = focusedPlayer
+      ? new THREE.Vector3(
+          focusedPlayer.position[0],
+          focusedPlayer.position[1] + 1.4 * mapScaleRatio,
+          focusedPlayer.position[2],
+        )
+      : overview.center;
+    const distance = focusedPlayer
+      ? 9 * mapScaleRatio
+      : Math.max(16 * mapScaleRatio, overview.radius * 1.75);
+    const nextCameraPosition = focusedPlayer
+      ? new THREE.Vector3(
+          focusedPlayer.position[0] + distance * 0.35,
+          focusedPlayer.position[1] + distance * 0.7,
+          focusedPlayer.position[2] + distance * 0.82,
+        )
+      : new THREE.Vector3(
+          overview.center.x + distance * 0.42,
+          overview.center.y + distance * 0.85,
+          overview.center.z + distance * 0.78,
+        );
+    const alpha = 1 - Math.exp(-Math.max(delta, 0) * (focusedPlayer ? 3.8 : 2.2));
+    targetRef.current.lerp(nextTarget, alpha);
+    camera.position.lerp(nextCameraPosition, alpha);
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(targetRef.current);
+      controlsRef.current.update();
+    }
+  });
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enableDamping
+      enablePan
+      enableRotate
+      dampingFactor={0.08}
+      minDistance={4 * mapScaleRatio}
+      maxDistance={140 * mapScaleRatio}
+      minPolarAngle={Math.PI / 5}
+      maxPolarAngle={Math.PI / 2.08}
+      mouseButtons={{
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      }}
+      makeDefault
+    />
+  );
+}
+
 const runtimeRaycaster = new THREE.Raycaster();
 const runtimeDownVector = new THREE.Vector3(0, -1, 0);
 
@@ -169,6 +277,20 @@ function getRuntimeTerrainY(terrain: THREE.Object3D, x: number, z: number, fallb
     fallbackY,
   );
   return hit?.point.y ?? fallbackY;
+}
+
+function useTerrainSnappedPosition(
+  position: [number, number, number],
+  terrainScene: THREE.Object3D | null,
+) {
+  return useMemo<[number, number, number]>(() => {
+    if (!terrainScene) return position;
+    return [
+      position[0],
+      getRuntimeTerrainY(terrainScene, position[0], position[2], position[1]),
+      position[2],
+    ];
+  }, [position, terrainScene]);
 }
 
 function snapRuntimeToTerrain(terrain: THREE.Object3D) {
@@ -270,6 +392,15 @@ function isEnvironmentAsset(name: string, fileUrl: string) {
     lowerUrl.includes("terrain") ||
     lowerUrl.includes("environment")
   );
+}
+
+function preloadRuntimeModel(src: string | null | undefined) {
+  if (!src) return;
+  try {
+    preload3DModel(src);
+  } catch (error) {
+    console.warn("Runtime model preload failed:", src, error);
+  }
 }
 
 function PlacedObjectLayer() {
@@ -519,6 +650,81 @@ function ArrowProjectileLayer({ terrainScene }: { terrainScene: THREE.Object3D |
   );
 }
 
+function ActorFallbackMesh({
+  color,
+  height,
+}: {
+  color: string;
+  height: number;
+}) {
+  return (
+    <mesh castShadow position={[0, height / 2, 0]}>
+      <capsuleGeometry args={[height * 0.18, height * 0.64, 6, 12]} />
+      <meshStandardMaterial color={color} roughness={0.45} />
+    </mesh>
+  );
+}
+
+type ActorRenderLod = "high" | "proxy";
+
+function useActorRenderLod(
+  position: [number, number, number],
+  mapScaleRatio: number,
+  highDistance = 56,
+): ActorRenderLod {
+  const { camera } = useThree();
+  const [lod, setLod] = useState<ActorRenderLod>("high");
+  const lastCheckRef = useRef(0);
+  const actorPositionRef = useRef(new THREE.Vector3(...position));
+
+  useEffect(() => {
+    actorPositionRef.current.fromArray(position);
+  }, [position]);
+
+  useFrame((state) => {
+    const elapsed = state.clock.elapsedTime;
+    if (elapsed - lastCheckRef.current < 0.35) return;
+    lastCheckRef.current = elapsed;
+
+    const threshold = highDistance * Math.max(mapScaleRatio, 0.001);
+    const nextLod =
+      camera.position.distanceTo(actorPositionRef.current) <= threshold
+        ? "high"
+        : "proxy";
+    setLod((current) => (current === nextLod ? current : nextLod));
+  });
+
+  return lod;
+}
+
+class RuntimeModelErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode; resetKey: string },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode; resetKey: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.warn("Runtime actor model failed:", error);
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
 function RemotePlayerAvatar({
   player,
   playerActions,
@@ -542,10 +748,16 @@ function RemotePlayerAvatar({
   const animationActions = player.characterActions?.length
     ? player.characterActions
     : playerActions;
+  const dimensions = getPlayerDimensions(mapScaleRatio);
+  const lod = useActorRenderLod(player.position, mapScaleRatio, 64);
   const remoteAnimationUrl = useMemo(
     () => pickRemoteAnimationUrl(player, animationActions),
     [animationActions, player],
   );
+
+  useEffect(() => {
+    setModelScene(null);
+  }, [player.characterFileUrl]);
 
   useEffect(() => {
     const packetAgeSeconds = THREE.MathUtils.clamp(
@@ -594,23 +806,25 @@ function RemotePlayerAvatar({
 
   return (
     <group ref={groupRef} position={initialPosition}>
-      <Suspense fallback={null}>
-        {player.characterFileUrl ? (
-          <ModelLoader
-            debugLabel={`remote-player:${player.displayName}`}
-            fitHeight={1.7 * mapScaleRatio}
-            groundToY={0}
-            src={player.characterFileUrl}
-            onSceneReady={setModelScene}
-          />
-        ) : (
-          <mesh castShadow position={[0, 0.85 * mapScaleRatio, 0]}>
-            <capsuleGeometry args={[0.32 * mapScaleRatio, 1.2 * mapScaleRatio, 6, 12]} />
-            <meshStandardMaterial color="#7dd3fc" roughness={0.45} />
-          </mesh>
-        )}
-      </Suspense>
-      {modelScene && remoteAnimationUrl ? (
+      {lod === "high" && player.characterFileUrl ? (
+        <Suspense fallback={<ActorFallbackMesh color="#7dd3fc" height={dimensions.visualHeight} />}>
+          <RuntimeModelErrorBoundary
+            fallback={<ActorFallbackMesh color="#7dd3fc" height={dimensions.visualHeight} />}
+            resetKey={player.characterFileUrl}
+          >
+            <ModelLoader
+              debugLabel={`remote-player:${player.displayName}`}
+              fitHeight={dimensions.visualHeight}
+              groundToY={0}
+              src={player.characterFileUrl}
+              onSceneReady={setModelScene}
+            />
+          </RuntimeModelErrorBoundary>
+        </Suspense>
+      ) : (
+        <ActorFallbackMesh color="#7dd3fc" height={dimensions.visualHeight} />
+      )}
+      {lod === "high" && modelScene && remoteAnimationUrl ? (
         <Suspense fallback={null}>
           <AnimationActionPlayer
             key={remoteAnimationUrl}
@@ -619,7 +833,7 @@ function RemotePlayerAvatar({
           />
         </Suspense>
       ) : null}
-      <Html center position={[0, 2.25 * mapScaleRatio, 0]}>
+      <Html center position={[0, dimensions.labelY, 0]}>
         <span className="remote-player-label">
           {player.displayName}
           {player.actionState && player.actionState !== "idle" ? (
@@ -657,13 +871,16 @@ function RemotePlayerLayer({
 function ServerEnemyAvatar({
   enemy,
   mapScaleRatio,
+  terrainScene,
 }: {
   enemy: RealtimeEnemyState;
   mapScaleRatio: number;
+  terrainScene: THREE.Object3D | null;
 }) {
+  const snappedPosition = useTerrainSnappedPosition(enemy.position, terrainScene);
   const groupRef = useRef<THREE.Group | null>(null);
-  const targetPositionRef = useRef(new THREE.Vector3(...enemy.position));
-  const currentPositionRef = useRef(new THREE.Vector3(...enemy.position));
+  const targetPositionRef = useRef(new THREE.Vector3(...snappedPosition));
+  const currentPositionRef = useRef(new THREE.Vector3(...snappedPosition));
   const targetYawRef = useRef(0);
   const localEnemy = useMemo(
     () => ({
@@ -677,14 +894,16 @@ function ServerEnemyAvatar({
     }),
     [enemy],
   );
+  const dimensions = getEnemyDimensions(enemy.type, mapScaleRatio);
+  const lod = useActorRenderLod(snappedPosition, mapScaleRatio, 58);
 
   useEffect(() => {
-    targetPositionRef.current.fromArray(enemy.position);
+    targetPositionRef.current.fromArray(snappedPosition);
     const horizontalSpeed = Math.hypot(enemy.velocity[0], enemy.velocity[2]);
     if (horizontalSpeed > 0.05) {
       targetYawRef.current = Math.atan2(enemy.velocity[0], enemy.velocity[2]);
     }
-  }, [enemy.position, enemy.velocity]);
+  }, [enemy.velocity, snappedPosition]);
 
   useFrame((_, delta) => {
     const group = groupRef.current;
@@ -700,12 +919,36 @@ function ServerEnemyAvatar({
   });
 
   return (
-    <group ref={groupRef} position={enemy.position}>
-      <Suspense fallback={null}>
-        <CharacterEnemyVisual enemy={localEnemy} mapScaleRatio={mapScaleRatio} />
-      </Suspense>
+    <group ref={groupRef} position={snappedPosition}>
+      {lod === "high" ? (
+        <Suspense
+          fallback={
+            <ActorFallbackMesh
+              color={enemy.type === "zombie_fantasy" ? "#d946ef" : "#84cc16"}
+              height={dimensions.visualHeight}
+            />
+          }
+        >
+          <RuntimeModelErrorBoundary
+            fallback={
+              <ActorFallbackMesh
+                color={enemy.type === "zombie_fantasy" ? "#d946ef" : "#84cc16"}
+                height={dimensions.visualHeight}
+              />
+            }
+            resetKey={enemy.type}
+          >
+            <CharacterEnemyVisual enemy={localEnemy} mapScaleRatio={mapScaleRatio} />
+          </RuntimeModelErrorBoundary>
+        </Suspense>
+      ) : (
+        <ActorFallbackMesh
+          color={enemy.type === "zombie_fantasy" ? "#d946ef" : "#84cc16"}
+          height={dimensions.visualHeight}
+        />
+      )}
       {!enemy.isDead && enemy.hp < enemy.maxHp ? (
-        <Html position={[0, (enemy.type === "zombie_fantasy" ? 2.6 : 2.1) * mapScaleRatio, 0]} center>
+        <Html position={[0, dimensions.labelY, 0]} center>
           <div className="enemy-health-bar-container">
             <div
               className="enemy-health-bar-fill"
@@ -721,15 +964,50 @@ function ServerEnemyAvatar({
 function ServerNpcAvatar({
   npc,
   mapScaleRatio,
+  terrainScene,
 }: {
   npc: RealtimeNpcState;
   mapScaleRatio: number;
+  terrainScene: THREE.Object3D | null;
 }) {
+  const snappedPosition = useTerrainSnappedPosition(npc.position, terrainScene);
+  const dimensions = getNpcDimensions(npc.kind, mapScaleRatio);
+  const lod = useActorRenderLod(snappedPosition, mapScaleRatio, 52);
+
   return (
-    <group position={npc.position}>
-      <Suspense fallback={null}>
-        <NpcVisual mapScaleRatio={mapScaleRatio} />
-      </Suspense>
+    <group position={snappedPosition}>
+      {lod === "high" && npc.fileUrl ? (
+        <Suspense fallback={<ActorFallbackMesh color="#fbbf24" height={dimensions.visualHeight} />}>
+          <RuntimeModelErrorBoundary
+            fallback={<ActorFallbackMesh color="#fbbf24" height={dimensions.visualHeight} />}
+            resetKey={npc.fileUrl}
+          >
+            <ModelLoader
+              debugLabel={`server-npc:${npc.name ?? npc.id}`}
+              fitHeight={dimensions.visualHeight}
+              groundToY={0}
+              src={npc.fileUrl}
+            />
+          </RuntimeModelErrorBoundary>
+        </Suspense>
+      ) : lod === "high" ? (
+        <Suspense fallback={<ActorFallbackMesh color="#fbbf24" height={dimensions.visualHeight} />}>
+          <RuntimeModelErrorBoundary
+            fallback={<ActorFallbackMesh color="#fbbf24" height={dimensions.visualHeight} />}
+            resetKey="robot-npc"
+          >
+            <NpcVisual mapScaleRatio={mapScaleRatio} />
+          </RuntimeModelErrorBoundary>
+        </Suspense>
+      ) : (
+        <ActorFallbackMesh color="#fbbf24" height={dimensions.visualHeight} />
+      )}
+      <Html center position={[0, dimensions.labelY, 0]}>
+        <span className="remote-player-label">
+          {npc.name ?? npc.kind}
+          {npc.kind !== "npc" ? <em>{npc.kind}</em> : null}
+        </span>
+      </Html>
     </group>
   );
 }
@@ -737,9 +1015,11 @@ function ServerNpcAvatar({
 function ServerWorldLayer({
   snapshot,
   mapScaleRatio,
+  terrainScene,
 }: {
   snapshot: RealtimeWorldSnapshot;
   mapScaleRatio: number;
+  terrainScene: THREE.Object3D | null;
 }) {
   return (
     <>
@@ -748,6 +1028,7 @@ function ServerWorldLayer({
           key={enemy.id}
           enemy={enemy}
           mapScaleRatio={mapScaleRatio}
+          terrainScene={terrainScene}
         />
       ))}
       {snapshot.npcs.map((npc) => (
@@ -755,9 +1036,138 @@ function ServerWorldLayer({
           key={npc.id}
           npc={npc}
           mapScaleRatio={mapScaleRatio}
+          terrainScene={terrainScene}
         />
       ))}
     </>
+  );
+}
+
+type RuntimeStatsSnapshot = {
+  fps: number;
+  actors: number;
+  high: number;
+  proxy: number;
+  remotePlayers: number;
+  enemies: number;
+  npcs: number;
+  localFallback: boolean;
+};
+
+function countHighLod(
+  camera: THREE.Camera,
+  positions: Array<[number, number, number]>,
+  threshold: number,
+) {
+  let high = 0;
+  const point = new THREE.Vector3();
+  for (const position of positions) {
+    point.fromArray(position);
+    if (camera.position.distanceTo(point) <= threshold) high += 1;
+  }
+  return high;
+}
+
+function RuntimePerformanceOverlay({
+  enemies,
+  mapScaleRatio,
+  remotePlayers,
+  show,
+  useServerWorld,
+  worldSnapshot,
+}: {
+  enemies: Array<{ position: [number, number, number] }>;
+  mapScaleRatio: number;
+  remotePlayers: RemotePresencePlayer[];
+  show: boolean;
+  useServerWorld: boolean;
+  worldSnapshot: RealtimeWorldSnapshot | null;
+}) {
+  const { camera } = useThree();
+  const frameCountRef = useRef(0);
+  const lastSampleRef = useRef(0);
+  const [stats, setStats] = useState<RuntimeStatsSnapshot>({
+    fps: 0,
+    actors: 0,
+    high: 0,
+    proxy: 0,
+    remotePlayers: 0,
+    enemies: 0,
+    npcs: 0,
+    localFallback: false,
+  });
+
+  useFrame((state) => {
+    if (!show) return;
+    frameCountRef.current += 1;
+    const now = state.clock.elapsedTime;
+    const elapsed = now - lastSampleRef.current;
+    if (elapsed < 0.5) return;
+
+    const scale = Math.max(mapScaleRatio, 0.001);
+    const remoteHigh = countHighLod(
+      camera,
+      remotePlayers.map((player) => player.position),
+      64 * scale,
+    );
+    const serverEnemies = worldSnapshot?.enemies ?? [];
+    const enemySource = useServerWorld ? serverEnemies : enemies;
+    const enemyHigh = countHighLod(
+      camera,
+      enemySource.map((enemy) => enemy.position),
+      58 * scale,
+    );
+    const npcs = worldSnapshot?.npcs ?? [];
+    const npcHigh = countHighLod(
+      camera,
+      npcs.map((npc) => npc.position),
+      52 * scale,
+    );
+    const actorCount = remotePlayers.length + enemySource.length + npcs.length;
+    const high = remoteHigh + enemyHigh + npcHigh;
+
+    setStats({
+      fps: Math.round(frameCountRef.current / elapsed),
+      actors: actorCount,
+      high,
+      proxy: Math.max(0, actorCount - high),
+      remotePlayers: remotePlayers.length,
+      enemies: enemySource.length,
+      npcs: npcs.length,
+      localFallback: !useServerWorld,
+    });
+    frameCountRef.current = 0;
+    lastSampleRef.current = now;
+  });
+
+  if (!show) return null;
+
+  return (
+    <Html fullscreen prepend>
+      <aside className="runtime-perf-overlay">
+        <header>
+          <span>Runtime</span>
+          <strong>{stats.fps} FPS</strong>
+        </header>
+        <div>
+          <span>Actors</span>
+          <strong>{stats.actors}</strong>
+        </div>
+        <div>
+          <span>LOD</span>
+          <strong>{stats.high} high / {stats.proxy} proxy</strong>
+        </div>
+        <div>
+          <span>Remote</span>
+          <strong>{stats.remotePlayers}</strong>
+        </div>
+        <div>
+          <span>World</span>
+          <strong>{stats.enemies} enemies / {stats.npcs} NPC</strong>
+        </div>
+        {stats.localFallback ? <em>Local preview world</em> : <em>Server world</em>}
+      </aside>
+    </Html>
   );
 }
 
@@ -802,11 +1212,17 @@ export function GameCanvas({
   remotePlayers = [],
   worldSnapshot = null,
   onCombatAttack,
+  showRuntimeStats = false,
+  spectatorFocusPlayerId = null,
+  spectatorMode = false,
 }: {
   playerActions?: any[];
   remotePlayers?: RemotePresencePlayer[];
   worldSnapshot?: RealtimeWorldSnapshot | null;
   onCombatAttack?: (attack: RealtimeCombatAttack) => Promise<void> | void;
+  showRuntimeStats?: boolean;
+  spectatorFocusPlayerId?: string | null;
+  spectatorMode?: boolean;
 }) {
   const controlsRef = useRef<any>(null);
   const [terrainScene, setTerrainScene] = useState<THREE.Object3D | null>(null);
@@ -836,14 +1252,29 @@ export function GameCanvas({
   }, [spawnEnemies, useServerWorld]);
 
   useEffect(() => {
-    preload3DModel(activeLevel.mapModelUrl);
-    if (activeLevel.playerCharacter?.fileUrl) {
-      preload3DModel(activeLevel.playerCharacter.fileUrl);
-    }
+    preloadRuntimeModel(activeLevel.mapModelUrl);
+    preloadRuntimeModel(activeLevel.playerCharacter?.fileUrl);
     for (const object of activeLevel.placedObjects) {
-      preload3DModel(object.fileUrl);
+      preloadRuntimeModel(object.fileUrl);
     }
   }, [activeLevel]);
+
+  useEffect(() => {
+    preloadRuntimeModel("/models/low_poly_zombie_game_animation.glb");
+    preloadRuntimeModel("/models/zombie_fantasy_animated.glb");
+    preloadRuntimeModel("/models/robot_tuan_tra_NPC.glb");
+
+    for (const player of remotePlayers) {
+      preloadRuntimeModel(player.characterFileUrl);
+      for (const action of player.characterActions ?? []) {
+        preloadRuntimeModel(action.fileUrl);
+      }
+    }
+
+    for (const npc of worldSnapshot?.npcs ?? []) {
+      preloadRuntimeModel(npc.fileUrl);
+    }
+  }, [remotePlayers, worldSnapshot]);
 
   useEffect(() => {
     setGroundReady(false);
@@ -861,8 +1292,8 @@ export function GameCanvas({
 
   return (
     <div className="game-canvas-container">
-      <BowReticleOverlay />
-      <BowFirePad />
+      {!spectatorMode ? <BowReticleOverlay /> : null}
+      {!spectatorMode ? <BowFirePad /> : null}
       <Canvas
         shadows="percentage"
         dpr={[1, 1.25]}
@@ -910,12 +1341,14 @@ export function GameCanvas({
 
             {/* Playable Character */}
             {groundReady && hasPlayerCharacter ? (
-              <Player
-                key={`player-${worldVersion}`}
-                playerActions={playerActions}
-                serverEnemies={worldSnapshot?.enemies ?? []}
-                onCombatAttack={onCombatAttack}
-              />
+              !spectatorMode ? (
+                <Player
+                  key={`player-${worldVersion}`}
+                  playerActions={playerActions}
+                  serverEnemies={worldSnapshot?.enemies ?? []}
+                  onCombatAttack={onCombatAttack}
+                />
+              ) : null
             ) : null}
 
             {/* Enemies & NPC Bots */}
@@ -929,11 +1362,15 @@ export function GameCanvas({
 
           </Physics>
           {groundReady && worldSnapshot ? (
-            <ServerWorldLayer snapshot={worldSnapshot} mapScaleRatio={mapScaleRatio} />
+            <ServerWorldLayer
+              snapshot={worldSnapshot}
+              mapScaleRatio={mapScaleRatio}
+              terrainScene={terrainScene}
+            />
           ) : null}
 
           <BowTrajectoryLayer />
-          <ArrowProjectileLayer terrainScene={terrainScene} />
+          {!spectatorMode ? <ArrowProjectileLayer terrainScene={terrainScene} /> : null}
           <RemotePlayerLayer
             players={remotePlayers}
             playerActions={playerActions}
@@ -944,7 +1381,25 @@ export function GameCanvas({
           <FloatingDamageLayer />
 
           {/* Camera controller tracking the player */}
-          <CameraController controlsRef={controlsRef} />
+          {spectatorMode ? (
+            <SpectatorCameraController
+              controlsRef={controlsRef}
+              focusPlayerId={spectatorFocusPlayerId}
+              mapScaleRatio={mapScaleRatio}
+              players={remotePlayers}
+              worldSnapshot={worldSnapshot}
+            />
+          ) : (
+            <CameraController controlsRef={controlsRef} />
+          )}
+          <RuntimePerformanceOverlay
+            enemies={enemies}
+            mapScaleRatio={mapScaleRatio}
+            remotePlayers={remotePlayers}
+            show={showRuntimeStats}
+            useServerWorld={useServerWorld}
+            worldSnapshot={worldSnapshot}
+          />
         </Suspense>
       </Canvas>
     </div>

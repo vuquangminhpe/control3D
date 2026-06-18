@@ -154,14 +154,18 @@ async function getJoinIdentity(request: Request) {
 
 export async function POST(request: Request, { params }: Context) {
   const { id } = await params;
-  const body = await request.json().catch(() => null) as { characterId?: unknown } | null;
+  const body = await request.json().catch(() => null) as { characterId?: unknown; spectator?: unknown } | null;
   const requestedCharacterId =
     typeof body?.characterId === "string" && body.characterId.trim()
       ? body.characterId.trim()
       : null;
+  const spectator = body?.spectator === true;
   const identity = await getJoinIdentity(request);
   if (!identity) {
     return fail("Unauthorized", 401);
+  }
+  if (spectator && !identity.isAdmin) {
+    return fail("Forbidden", 403);
   }
 
   const map = await getLevelById(id);
@@ -174,6 +178,29 @@ export async function POST(request: Request, { params }: Context) {
 
   let token: string;
   try {
+    if (spectator) {
+      token = createRealtimeJoinToken({
+        mapId: id,
+        userId: identity.userId,
+        displayName: identity.displayName,
+        characterId: null,
+        characterName: null,
+        characterFileUrl: null,
+        characterActions: [],
+        isAdmin: identity.isAdmin,
+        spectator: true,
+      });
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+
+      return ok({
+        mapId: id,
+        realtimeUrl: getRealtimeUrl(request),
+        joinToken: token,
+        roomId: `map:${id}`,
+        expiresAt,
+      });
+    }
+
     const selectedCharacter = selectJoinCharacter(
       map.mapCharacters,
       map.playerCharacter,

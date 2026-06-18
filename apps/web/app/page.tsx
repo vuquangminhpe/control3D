@@ -1,12 +1,16 @@
-"use client";
-
 import "@/components/game/game.css";
 import { GameWorkbench } from "@/components/game/GameWorkbench";
 
-export default function GamePage() {
+type PageProps = {
+  searchParams?: Promise<{ map?: string }>;
+};
+
+export default async function GamePage({ searchParams }: PageProps) {
+  const params = searchParams ? await searchParams : {};
+
   return (
     <main className="game-settings-page">
-      <GameWorkbench />
+      <GameWorkbench initialMapId={params.map ?? null} />
     </main>
   );
 }

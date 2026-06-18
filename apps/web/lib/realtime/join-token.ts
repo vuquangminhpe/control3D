@@ -17,6 +17,7 @@ export type RealtimeJoinTokenPayload = {
     durationMs: number | null;
   }>;
   isAdmin: boolean;
+  spectator?: boolean;
   exp: number;
 };
 

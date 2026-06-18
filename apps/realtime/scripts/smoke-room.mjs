@@ -240,6 +240,9 @@ async function run() {
     );
     assert.equal(aliceWorld.payload.mapId, mapId);
     assert.equal(aliceWorld.payload.enemies.length, 3);
+    assert.equal(aliceWorld.payload.enemies[0].height, 1.8);
+    assert.equal(aliceWorld.payload.enemies[0].radius, 0.42);
+    assert.equal(aliceWorld.payload.enemies[0].hitRadius, 0.75);
     assert.equal(aliceWorld.payload.npcs[0].id, "robot");
     const aliceWorldTick = await alice.waitFor(
       (event) =>
@@ -292,6 +295,45 @@ async function run() {
     );
     assert.equal(bobPresence.payload.characterId, "character-mage");
     assert.equal(bobPresence.payload.characterActions[0].fileUrl, "/animations/mage-run.fbx");
+
+    const spectator = await connectClient(
+      "spectator",
+      createJoinToken({
+        mapId,
+        userId: "admin-a",
+        displayName: "Admin preview",
+        characterId: null,
+        characterName: null,
+        characterFileUrl: null,
+        characterActions: [],
+        isAdmin: true,
+        spectator: true,
+      }),
+    );
+    const spectatorJoin = await spectator.waitFor(
+      (event) => event.type === "room:joined",
+      "join",
+    );
+    assert.equal(spectatorJoin.payload.self, null);
+    assert.deepEqual(
+      spectatorJoin.payload.players.map((player) => player.displayName).sort(),
+      ["Alice", "Bob"],
+    );
+    spectator.send({
+      type: "combat:attack",
+      payload: {
+        mode: "light",
+        origin: [0, 0, 0],
+        direction: [1, 0, 0],
+      },
+    });
+    const spectatorReadonly = await spectator.waitFor(
+      (event) =>
+        event.type === "error" &&
+        event.payload.code === "spectator_read_only",
+      "read-only error",
+    );
+    assert.equal(spectatorReadonly.payload.message, "Spectator preview cannot control gameplay.");
 
     bob.send({
       type: "presence:update",
@@ -427,6 +469,7 @@ async function run() {
     );
     assert.equal(bobChat.payload.displayName, "Alice");
 
+    spectator.close();
     alice.close();
     bob.close();
     console.log("Realtime room smoke passed.");
