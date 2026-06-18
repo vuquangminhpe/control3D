@@ -15,11 +15,36 @@ const PRESENCE_BROADCAST_INTERVAL_MS = Math.max(
   33,
   Math.round(1000 / Number(process.env.CONTROL3D_PRESENCE_BROADCAST_HZ || 20)),
 );
+const WORLD_BROADCAST_INTERVAL_MS = Math.max(
+  50,
+  Math.round(1000 / Number(process.env.CONTROL3D_WORLD_BROADCAST_HZ || 10)),
+);
+const ENEMY_DETECTION_RADIUS = Number(process.env.CONTROL3D_ENEMY_DETECTION_RADIUS || 15);
+const ENEMY_ATTACK_RADIUS = Number(process.env.CONTROL3D_ENEMY_ATTACK_RADIUS || 2);
+const ENEMY_ATTACK_COOLDOWN_MS = Number(process.env.CONTROL3D_ENEMY_ATTACK_COOLDOWN_MS || 1100);
+const COMBAT_ATTACK_COOLDOWN_MS = Number(process.env.CONTROL3D_COMBAT_ATTACK_COOLDOWN_MS || 420);
+const PLAYER_MAX_HP = Number(process.env.CONTROL3D_PLAYER_MAX_HP || 100);
+const REALTIME_ACTION_TRIGGERS = new Set([
+  "none",
+  "attack",
+  "talk",
+  "move",
+  "custom",
+  "crouch",
+  "jump",
+  "idle",
+]);
 
 /** @type {Map<string, Set<ClientConnection>>} */
 const rooms = new Map();
 /** @type {Map<string, Set<ClientConnection>>} */
 const dirtyPresenceByRoom = new Map();
+/** @type {Map<string, RealtimeWorldSnapshot>} */
+const roomWorlds = new Map();
+/** @type {Map<string, Set<string>>} */
+const rewardedEnemiesByRoom = new Map();
+/** @type {Map<string, Map<string, number>>} */
+const enemyDamageCooldownsByRoom = new Map();
 /** @type {Map<string, RealtimeChatMessage[]>} */
 const roomMessages = new Map();
 
@@ -30,21 +55,76 @@ const roomMessages = new Map();
  *   mapId: string;
  *   userId: string;
  *   displayName: string;
+ *   characterId: string | null;
  *   characterName: string | null;
  *   characterFileUrl: string | null;
+ *   characterActions: Array<{
+ *     id: string;
+ *     name: string;
+ *     fileUrl: string;
+ *     enabled: boolean;
+ *     trigger: string;
+ *     keyBinding: string | null;
+ *     durationMs: number | null;
+ *   }>;
  *   presenceSeq: number;
  *   position: [number, number, number];
  *   velocity: [number, number, number];
+ *   hp: number;
+ *   maxHp: number;
  *   actionState: string;
  *   activeActionName: string | null;
  *   activeActionUrl: string | null;
  *   chatTimestamps: number[];
  *   presenceTimestamps: number[];
  *   lastPresenceAt: number;
+ *   lastAttackAt: number;
  *   lastSeenAt: number;
  *   frameBuffer: Buffer;
  *   closed: boolean;
  * }} ClientConnection
+ *
+ * @typedef {{
+ *   id: string;
+ *   type: "zombie_low" | "zombie_fantasy";
+ *   position: [number, number, number];
+ * }} RuntimeZombieSpawn
+ *
+ * @typedef {{
+ *   id: string;
+ *   status?: "draft" | "published" | "archived";
+ *   playerSpawn: [number, number, number];
+ *   robotSpawn: [number, number, number];
+ *   zombieSpawns: RuntimeZombieSpawn[];
+ * }} RealtimeMapRuntime
+ *
+ * @typedef {{
+ *   id: string;
+ *   type: "zombie_low" | "zombie_fantasy";
+ *   position: [number, number, number];
+ *   velocity: [number, number, number];
+ *   hp: number;
+ *   maxHp: number;
+ *   actionState: string;
+ *   isDead: boolean;
+ *   seq: number;
+ * }} RealtimeEnemyState
+ *
+ * @typedef {{
+ *   id: string;
+ *   kind: string;
+ *   position: [number, number, number];
+ *   actionState: string;
+ *   seq: number;
+ * }} RealtimeNpcState
+ *
+ * @typedef {{
+ *   mapId: string;
+ *   serverTimeMs: number;
+ *   tick: number;
+ *   enemies: RealtimeEnemyState[];
+ *   npcs: RealtimeNpcState[];
+ * }} RealtimeWorldSnapshot
  *
  * @typedef {{
  *   id: string;
@@ -129,6 +209,36 @@ function verifyJoinToken(token) {
   }
 }
 
+function sanitizeCharacterActions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((action) => {
+      if (!action || typeof action !== "object") return null;
+      const id = typeof action.id === "string" ? action.id : "";
+      const name = typeof action.name === "string" ? action.name : "";
+      const fileUrl = typeof action.fileUrl === "string" ? action.fileUrl : "";
+      if (!id || !name || !fileUrl) return null;
+      return {
+        id: id.slice(0, 120),
+        name: name.slice(0, 120),
+        fileUrl: fileUrl.slice(0, 2000),
+        enabled: action.enabled !== false,
+        trigger:
+          typeof action.trigger === "string" && REALTIME_ACTION_TRIGGERS.has(action.trigger)
+            ? action.trigger
+            : "none",
+        keyBinding:
+          typeof action.keyBinding === "string" ? action.keyBinding.slice(0, 80) : null,
+        durationMs:
+          typeof action.durationMs === "number" && Number.isFinite(action.durationMs)
+            ? Math.max(1, Math.round(action.durationMs))
+            : null,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 40);
+}
+
 function getRoom(mapId) {
   let room = rooms.get(mapId);
   if (!room) {
@@ -164,18 +274,192 @@ async function persistChatMessage(message) {
   }
 }
 
+function getKillReward(enemy) {
+  return enemy.type === "zombie_fantasy" ? 300 : 100;
+}
+
+async function persistPointReward({ client, enemy, amount, transactionId }) {
+  if (!WEB_ORIGIN) {
+    return {
+      transactionId,
+      balanceAfter: null,
+      amount,
+      duplicate: false,
+    };
+  }
+
+  const response = await fetch(`${WEB_ORIGIN.replace(/\/$/, "")}/api/internal/realtime/rewards`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-control3d-realtime-secret": getRealtimeSecret(),
+    },
+    body: JSON.stringify({
+      id: transactionId,
+      userId: client.userId,
+      mapId: client.mapId,
+      sessionId: client.id,
+      enemyId: enemy.id,
+      enemyType: enemy.type,
+      amount,
+      type: "monster_kill",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to persist point reward.");
+  }
+  const payload = await response.json().catch(() => null);
+  if (!payload?.success) {
+    throw new Error(payload?.error || "Failed to persist point reward.");
+  }
+  return payload.data;
+}
+
+async function awardEnemyKillReward(client, enemy) {
+  let rewarded = rewardedEnemiesByRoom.get(client.mapId);
+  if (!rewarded) {
+    rewarded = new Set();
+    rewardedEnemiesByRoom.set(client.mapId, rewarded);
+  }
+  if (rewarded.has(enemy.id)) return null;
+  rewarded.add(enemy.id);
+
+  const amount = getKillReward(enemy);
+  const transactionId = `kill:${client.mapId}:${enemy.id}`;
+  try {
+    const result = await persistPointReward({ client, enemy, amount, transactionId });
+    return {
+      userId: client.userId,
+      enemyId: enemy.id,
+      amount,
+      balanceAfter:
+        typeof result.balanceAfter === "number" ? result.balanceAfter : null,
+      transactionId,
+      duplicate: Boolean(result.duplicate),
+    };
+  } catch {
+    return {
+      userId: client.userId,
+      enemyId: enemy.id,
+      amount,
+      balanceAfter: null,
+      transactionId,
+      duplicate: false,
+    };
+  }
+}
+
+function getEnemyStats(type) {
+  return type === "zombie_fantasy"
+    ? { hp: 110, maxHp: 110 }
+    : { hp: 40, maxHp: 40 };
+}
+
+function fallbackZombieSpawns(runtime) {
+  if (Array.isArray(runtime.zombieSpawns) && runtime.zombieSpawns.length > 0) {
+    return runtime.zombieSpawns;
+  }
+  const spawn = Array.isArray(runtime.playerSpawn) ? runtime.playerSpawn : [0, 1.5, 0];
+  return [
+    {
+      id: "fallback-enemy-1",
+      type: "zombie_low",
+      position: [spawn[0] + 4, spawn[1], spawn[2] + 5],
+    },
+    {
+      id: "fallback-enemy-2",
+      type: "zombie_low",
+      position: [spawn[0] - 5, spawn[1], spawn[2] + 7],
+    },
+    {
+      id: "fallback-enemy-3",
+      type: "zombie_fantasy",
+      position: [spawn[0] + 7, spawn[1], spawn[2] - 5],
+    },
+  ];
+}
+
+function createWorldSnapshot(mapId, runtime) {
+  const enemies = fallbackZombieSpawns(runtime).map((spawn, index) => {
+    const stats = getEnemyStats(spawn.type);
+    return {
+      id: spawn.id || `e${index + 1}`,
+      type: spawn.type,
+      position: spawn.position,
+      velocity: [0, 0, 0],
+      hp: stats.hp,
+      maxHp: stats.maxHp,
+      actionState: "idle",
+      isDead: false,
+      seq: 0,
+    };
+  });
+
+  return {
+    mapId,
+    serverTimeMs: Date.now(),
+    tick: 0,
+    enemies,
+    npcs: [
+      {
+        id: "robot",
+        kind: "robot",
+        position: Array.isArray(runtime.robotSpawn) ? runtime.robotSpawn : [0, 0, 0],
+        actionState: "idle",
+        seq: 0,
+      },
+    ],
+  };
+}
+
+async function fetchMapRuntime(mapId, isAdminPreview) {
+  if (!WEB_ORIGIN) return null;
+  const previewParam = isAdminPreview ? "?preview=1" : "";
+  const response = await fetch(
+    `${WEB_ORIGIN.replace(/\/$/, "")}/api/internal/realtime/maps/${encodeURIComponent(mapId)}/runtime${previewParam}`,
+    {
+      headers: {
+        "x-control3d-realtime-secret": getRealtimeSecret(),
+      },
+    },
+  );
+  if (!response.ok) return null;
+  const payload = await response.json().catch(() => null);
+  return payload?.success ? payload.data?.map ?? null : null;
+}
+
+async function getRoomWorld(mapId, isAdminPreview) {
+  const existing = roomWorlds.get(mapId);
+  if (existing) return existing;
+
+  const runtime =
+    (await fetchMapRuntime(mapId, isAdminPreview)) ??
+    {
+      id: mapId,
+      playerSpawn: [0, 1.5, 0],
+      robotSpawn: [0, 0, 0],
+      zombieSpawns: [],
+    };
+  const snapshot = createWorldSnapshot(mapId, runtime);
+  roomWorlds.set(mapId, snapshot);
+  return snapshot;
+}
+
 function toPresence(client) {
   return {
     id: client.id,
     userId: client.userId,
     displayName: client.displayName,
     mapId: client.mapId,
+    characterId: client.characterId,
     seq: client.presenceSeq,
     serverTimeMs: Date.now(),
     position: client.position,
     velocity: client.velocity,
     characterName: client.characterName,
     characterFileUrl: client.characterFileUrl,
+    characterActions: client.characterActions,
     actionState: client.actionState,
     activeActionName: client.activeActionName,
     activeActionUrl: client.activeActionUrl,
@@ -243,6 +527,212 @@ function flushPresenceUpdates() {
 
     dirtyPresenceByRoom.delete(mapId);
   }
+}
+
+function getNearestPlayer(room, enemy) {
+  let nearest = null;
+  for (const client of room) {
+    if (client.closed || client.hp <= 0) continue;
+    const dx = client.position[0] - enemy.position[0];
+    const dz = client.position[2] - enemy.position[2];
+    const distance = Math.hypot(dx, dz);
+    if (!nearest || distance < nearest.distance) {
+      nearest = { client, distance, dx, dz };
+    }
+  }
+  return nearest;
+}
+
+function getEnemyDamage(mapId, enemy) {
+  return enemy.type === "zombie_fantasy" ? 12 : 5;
+}
+
+function applyEnemyDamage(mapId, enemy, client, now) {
+  let cooldowns = enemyDamageCooldownsByRoom.get(mapId);
+  if (!cooldowns) {
+    cooldowns = new Map();
+    enemyDamageCooldownsByRoom.set(mapId, cooldowns);
+  }
+
+  const cooldownKey = `${enemy.id}:${client.id}`;
+  const lastHitAt = cooldowns.get(cooldownKey) ?? 0;
+  if (now - lastHitAt < ENEMY_ATTACK_COOLDOWN_MS) return false;
+
+  cooldowns.set(cooldownKey, now);
+  const amount = getEnemyDamage(mapId, enemy);
+  client.hp = Math.max(0, client.hp - amount);
+  sendEvent(client, "player:damage", {
+    userId: client.userId,
+    enemyId: enemy.id,
+    amount,
+    hp: client.hp,
+    maxHp: client.maxHp,
+  });
+  return true;
+}
+
+function simulateWorlds(deltaSeconds) {
+  const now = Date.now();
+  for (const [mapId, world] of roomWorlds) {
+    const room = rooms.get(mapId);
+    if (!room || room.size === 0) continue;
+
+    let changed = false;
+    for (const enemy of world.enemies) {
+      if (enemy.isDead || enemy.hp <= 0) continue;
+
+      const nearest = getNearestPlayer(room, enemy);
+      if (!nearest || nearest.distance > ENEMY_DETECTION_RADIUS) {
+        if (enemy.actionState !== "idle" || enemy.velocity.some((value) => value !== 0)) {
+          enemy.actionState = "idle";
+          enemy.velocity = [0, 0, 0];
+          enemy.seq += 1;
+          changed = true;
+        }
+        continue;
+      }
+
+      if (nearest.distance <= ENEMY_ATTACK_RADIUS) {
+        if (applyEnemyDamage(mapId, enemy, nearest.client, now)) {
+          changed = true;
+        }
+        if (enemy.actionState !== "attack" || enemy.velocity.some((value) => value !== 0)) {
+          enemy.actionState = "attack";
+          enemy.velocity = [0, 0, 0];
+          enemy.seq += 1;
+          changed = true;
+        }
+        continue;
+      }
+
+      const length = Math.max(nearest.distance, 0.0001);
+      const speed = enemy.type === "zombie_fantasy" ? 3 : 2;
+      const step = Math.min(nearest.distance - ENEMY_ATTACK_RADIUS, speed * deltaSeconds);
+      const velocityX = (nearest.dx / length) * speed;
+      const velocityZ = (nearest.dz / length) * speed;
+      enemy.position = [
+        Number((enemy.position[0] + (nearest.dx / length) * step).toFixed(3)),
+        enemy.position[1],
+        Number((enemy.position[2] + (nearest.dz / length) * step).toFixed(3)),
+      ];
+      enemy.velocity = [
+        Number(velocityX.toFixed(3)),
+        0,
+        Number(velocityZ.toFixed(3)),
+      ];
+      enemy.actionState = "run";
+      enemy.seq += 1;
+      changed = true;
+    }
+
+    if (changed) {
+      world.tick += 1;
+      world.serverTimeMs = now;
+      broadcast(mapId, "world:snapshot", world);
+    }
+  }
+}
+
+function normalizeDirection(value) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    !value.every((entry) => Number.isFinite(entry))
+  ) {
+    return null;
+  }
+  const x = Number(value[0]);
+  const z = Number(value[2]);
+  const length = Math.hypot(x, z);
+  if (length < 0.001) return null;
+  return [x / length, 0, z / length];
+}
+
+function getAttackProfile(mode) {
+  if (mode === "heavy") {
+    return { damage: 35, reach: 3.4, arcDot: Math.cos((95 * Math.PI) / 180 / 2) };
+  }
+  if (mode === "alt") {
+    return { damage: 24, reach: 4.2, arcDot: Math.cos((70 * Math.PI) / 180 / 2) };
+  }
+  return { damage: 18, reach: 3.1, arcDot: Math.cos((90 * Math.PI) / 180 / 2) };
+}
+
+function broadcastWorldSnapshot(mapId, world) {
+  world.tick += 1;
+  world.serverTimeMs = Date.now();
+  broadcast(mapId, "world:snapshot", world);
+}
+
+function applyCombatAttack(client, payload) {
+  const now = Date.now();
+  if (now - client.lastAttackAt < COMBAT_ATTACK_COOLDOWN_MS) {
+    sendError(client, "attack_rate_limited", "Attack cooldown has not finished.");
+    return;
+  }
+
+  const direction = normalizeDirection(payload?.direction);
+  if (!direction) {
+    sendError(client, "invalid_attack", "Invalid attack direction.");
+    return;
+  }
+
+  const world = roomWorlds.get(client.mapId);
+  if (!world) {
+    sendError(client, "world_not_ready", "World state is not ready.");
+    return;
+  }
+
+  const mode = ["light", "heavy", "alt"].includes(payload?.mode) ? payload.mode : "light";
+  const profile = getAttackProfile(mode);
+  let best = null;
+  for (const enemy of world.enemies) {
+    if (enemy.isDead || enemy.hp <= 0) continue;
+    const dx = enemy.position[0] - client.position[0];
+    const dz = enemy.position[2] - client.position[2];
+    const distance = Math.hypot(dx, dz);
+    const targetRadius = enemy.type === "zombie_fantasy" ? 1.35 : 0.75;
+    if (distance > profile.reach + targetRadius) continue;
+    const length = Math.max(distance, 0.0001);
+    const dot = (dx / length) * direction[0] + (dz / length) * direction[2];
+    if (dot < profile.arcDot) continue;
+    if (!best || distance < best.distance) {
+      best = { enemy, distance };
+    }
+  }
+
+  client.lastAttackAt = now;
+  if (!best) {
+    sendError(client, "attack_missed", "No enemy in server-authoritative hit range.");
+    return;
+  }
+
+  const enemy = best.enemy;
+  enemy.hp = Math.max(0, enemy.hp - profile.damage);
+  const wasDead = enemy.isDead;
+  enemy.isDead = enemy.hp <= 0;
+  enemy.actionState = enemy.isDead ? "death" : "hit";
+  enemy.velocity = [0, 0, 0];
+  enemy.seq += 1;
+  broadcast(client.mapId, "combat:hit", {
+    enemyId: enemy.id,
+    userId: client.userId,
+    damage: profile.damage,
+    hp: enemy.hp,
+    isDead: enemy.isDead,
+    clientAttackId:
+      typeof payload?.clientAttackId === "string"
+        ? payload.clientAttackId.slice(0, 80)
+        : null,
+  });
+  if (!wasDead && enemy.isDead) {
+    void awardEnemyKillReward(client, enemy).then((reward) => {
+      if (reward) {
+        broadcast(client.mapId, "reward:points", reward);
+      }
+    });
+  }
+  broadcastWorldSnapshot(client.mapId, world);
 }
 
 function sanitizeChatBody(value) {
@@ -372,6 +862,11 @@ function handleClientEvent(client, event) {
     return;
   }
 
+  if (event.type === "combat:attack") {
+    applyCombatAttack(client, event.payload);
+    return;
+  }
+
   if (event.type === "ping") {
     sendEvent(client, "pong", {
       sentAt: event.payload?.sentAt,
@@ -450,13 +945,16 @@ function closeClient(client, reason = "closed") {
   if (room && room.size === 0) {
     rooms.delete(client.mapId);
     dirtyPresenceByRoom.delete(client.mapId);
+    roomWorlds.delete(client.mapId);
+    rewardedEnemiesByRoom.delete(client.mapId);
+    enemyDamageCooldownsByRoom.delete(client.mapId);
   }
   if (!client.socket.destroyed) {
     client.socket.destroy();
   }
 }
 
-function acceptWebSocket(request, socket, head) {
+async function acceptWebSocket(request, socket, head) {
   const key = request.headers["sec-websocket-key"];
   if (!key) {
     socket.destroy();
@@ -489,6 +987,15 @@ function acceptWebSocket(request, socket, head) {
     return;
   }
 
+  let worldSnapshot;
+  try {
+    worldSnapshot = await getRoomWorld(payload.mapId, Boolean(payload.isAdmin));
+  } catch {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
   socket.write(
     [
       "HTTP/1.1 101 Switching Protocols",
@@ -505,17 +1012,22 @@ function acceptWebSocket(request, socket, head) {
     mapId: payload.mapId,
     userId: payload.userId,
     displayName: String(payload.displayName).slice(0, 40),
+    characterId: typeof payload.characterId === "string" ? payload.characterId.slice(0, 120) : null,
     characterName: payload.characterName ?? null,
     characterFileUrl: payload.characterFileUrl ?? null,
+    characterActions: sanitizeCharacterActions(payload.characterActions),
     presenceSeq: 0,
     position: [0, 0, 0],
     velocity: [0, 0, 0],
+    hp: PLAYER_MAX_HP,
+    maxHp: PLAYER_MAX_HP,
     actionState: "idle",
     activeActionName: null,
     activeActionUrl: null,
     chatTimestamps: [],
     presenceTimestamps: [],
     lastPresenceAt: 0,
+    lastAttackAt: 0,
     lastSeenAt: Date.now(),
     frameBuffer: Buffer.alloc(0),
     closed: false,
@@ -527,6 +1039,10 @@ function acceptWebSocket(request, socket, head) {
     self: toPresence(client),
     players: otherPlayers,
     messages: getRecentMessages(client.mapId),
+  });
+  sendEvent(client, "world:snapshot", {
+    ...worldSnapshot,
+    serverTimeMs: Date.now(),
   });
   markPresenceDirty(client);
 
@@ -589,6 +1105,10 @@ setInterval(() => {
 }, 5_000).unref();
 
 setInterval(flushPresenceUpdates, PRESENCE_BROADCAST_INTERVAL_MS).unref();
+setInterval(
+  () => simulateWorlds(WORLD_BROADCAST_INTERVAL_MS / 1000),
+  WORLD_BROADCAST_INTERVAL_MS,
+).unref();
 
 server.listen(PORT, () => {
   console.log(`Control3D realtime listening on ws://localhost:${PORT}/rooms/game`);

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   adminLoginSchema,
   loginSchema,
@@ -19,6 +19,7 @@ const formCopy: Record<
     eyebrow: string;
     submit: string;
     endpoint: string;
+    meEndpoint: string;
     redirectTo: string;
   }
 > = {
@@ -27,6 +28,7 @@ const formCopy: Record<
     eyebrow: "PLAYER ACCESS",
     submit: "Login",
     endpoint: "/api/auth/login",
+    meEndpoint: "/api/auth/me",
     redirectTo: "/lobby",
   },
   "user-register": {
@@ -34,6 +36,7 @@ const formCopy: Record<
     eyebrow: "PLAYER ACCESS",
     submit: "Register",
     endpoint: "/api/auth/register",
+    meEndpoint: "/api/auth/me",
     redirectTo: "/lobby",
   },
   "admin-login": {
@@ -41,6 +44,7 @@ const formCopy: Record<
     eyebrow: "ADMIN ACCESS",
     submit: "Login",
     endpoint: "/api/admin/auth/login",
+    meEndpoint: "/api/admin/auth/me",
     redirectTo: "/admin/maps",
   },
 };
@@ -62,6 +66,13 @@ function validate(mode: AuthMode, state: FormState) {
   return loginSchema.safeParse(state);
 }
 
+function getRedirectTarget(fallback: string) {
+  if (typeof window === "undefined") return fallback;
+  const next = new URLSearchParams(window.location.search).get("next");
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return fallback;
+  return next;
+}
+
 export function AuthForm({ mode }: { mode: AuthMode }) {
   const router = useRouter();
   const copy = formCopy[mode];
@@ -79,6 +90,28 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function redirectIfLoggedIn() {
+      try {
+        const response = await fetch(copy.meEndpoint, { cache: "no-store" });
+        const payload = await response.json().catch(() => null);
+        if (!cancelled && response.ok && payload?.success) {
+          router.replace(getRedirectTarget(copy.redirectTo) as Route);
+          router.refresh();
+        }
+      } catch {
+        // Staying on the login form is expected for guests.
+      }
+    }
+
+    void redirectIfLoggedIn();
+    return () => {
+      cancelled = true;
+    };
+  }, [copy.meEndpoint, copy.redirectTo, router]);
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setMessage(null);
@@ -94,7 +127,12 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     setIsSubmitting(true);
     try {
       await postJson(copy.endpoint, parsed.data);
-      router.push(copy.redirectTo as Route);
+      const meResponse = await fetch(copy.meEndpoint, { cache: "no-store" });
+      const mePayload = await meResponse.json().catch(() => null);
+      if (!meResponse.ok || !mePayload?.success) {
+        throw new Error(mePayload?.error ?? "Login succeeded but session was not confirmed");
+      }
+      router.replace(getRedirectTarget(copy.redirectTo) as Route);
       router.refresh();
     } catch (error) {
       setIsError(true);

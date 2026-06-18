@@ -4,6 +4,8 @@ import { useGameStore } from "@/store/gameStore";
 
 export function HUD() {
   const score = useGameStore((state) => state.score);
+  const serverPointBalance = useGameStore((state) => state.serverPointBalance);
+  const lastServerReward = useGameStore((state) => state.lastServerReward);
   const level = useGameStore((state) => state.level);
   const xp = useGameStore((state) => state.xp);
   const nextLevelXp = useGameStore((state) => state.nextLevelXp);
@@ -17,6 +19,8 @@ export function HUD() {
   
   const hpPercent = Math.max((playerHp / playerMaxHp) * 100, 0);
   const xpPercent = Math.max((xp / nextLevelXp) * 100, 0);
+  const pointValue = serverPointBalance ?? score;
+  const pointLabel = serverPointBalance === null ? "SCORE" : "POINTS";
 
   return (
     <div className="hud-container">
@@ -46,8 +50,11 @@ export function HUD() {
 
         {/* Score Card */}
         <div className="hud-score-card">
-          <span>SCORE</span>
-          <strong>{score}</strong>
+          <span>{pointLabel}</span>
+          <strong>{pointValue}</strong>
+          {serverPointBalance !== null && lastServerReward ? (
+            <small>+{lastServerReward.amount}</small>
+          ) : null}
         </div>
         <div className="hud-score-card">
           <span>WEAPON</span>
@@ -75,7 +82,7 @@ export function HUD() {
             <p>Your cybernetic systems were compromised by the infected horde.</p>
             <div className="stats-row">
               <div>Level reached: <strong>{level}</strong></div>
-              <div>Final Score: <strong>{score}</strong></div>
+              <div>Final {pointLabel}: <strong>{pointValue}</strong></div>
             </div>
             <button className="hud-action-button" onClick={startGame}>
               RESPAWN PLAYER
@@ -91,7 +98,7 @@ export function HUD() {
             <p>You have purged all infected anomalies from the western sector.</p>
             <div className="stats-row">
               <div>Level reached: <strong>{level}</strong></div>
-              <div>Final Score: <strong>{score}</strong></div>
+              <div>Final {pointLabel}: <strong>{pointValue}</strong></div>
             </div>
             <button className="hud-action-button victory" onClick={startGame}>
               PLAY AGAIN

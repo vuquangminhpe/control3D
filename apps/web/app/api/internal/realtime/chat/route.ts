@@ -1,34 +1,13 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-import { timingSafeEqual } from "node:crypto";
 import { chatMessageSchema } from "@control3d/shared/schemas/chat";
 import { createChatMessage } from "@/lib/model-store";
+import { isInternalRealtimeRequest } from "@/lib/realtime/internal-secret";
 import { fail, ok } from "@/lib/response";
 
-function getExpectedSecret() {
-  const configured =
-    process.env.CONTROL3D_REALTIME_SECRET || process.env.CONTROL3D_AUTH_SECRET;
-  if (configured) return configured;
-  if (process.env.NODE_ENV === "production") return null;
-  return "control3d-local-dev-secret-change-before-production";
-}
-
-function isAuthorized(request: Request) {
-  const expected = getExpectedSecret();
-  const provided = request.headers.get("x-control3d-realtime-secret");
-  if (!expected || !provided) return false;
-
-  const expectedBytes = Buffer.from(expected);
-  const providedBytes = Buffer.from(provided);
-  return (
-    expectedBytes.byteLength === providedBytes.byteLength &&
-    timingSafeEqual(expectedBytes, providedBytes)
-  );
-}
-
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) {
+  if (!isInternalRealtimeRequest(request)) {
     return fail("Unauthorized", 401);
   }
 

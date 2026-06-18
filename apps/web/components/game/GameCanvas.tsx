@@ -7,6 +7,12 @@ import { OrbitControls, Html, Environment, Sky, Line, useGLTF } from "@react-thr
 import { FBXLoader } from "three-stdlib";
 import * as THREE from "three";
 import { useShallow } from "zustand/react/shallow";
+import type {
+  RealtimeEnemyState,
+  RealtimeCombatAttack,
+  RealtimeNpcState,
+  RealtimeWorldSnapshot,
+} from "@control3d/shared/schemas/realtime";
 import {
   getEnemyRuntimePosition,
   setEnemyRuntimePosition,
@@ -17,7 +23,7 @@ import { AnimationActionPlayer, Player } from "./Player";
 import { Terrain } from "./Terrain";
 import { FloatingDamage, prewarmDamageTextures } from "./FloatingDamage";
 import { ModelLoader } from "@/components/3d/ModelLoader";
-import { CharacterEnemyBot, NpcBot } from "./EnemyBot";
+import { CharacterEnemyBot, CharacterEnemyVisual, NpcBot, NpcVisual } from "./EnemyBot";
 import { preload3DModel } from "@/hooks/use3DModel";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 
@@ -26,14 +32,66 @@ export type RemotePresencePlayer = {
   displayName: string;
   seq: number;
   serverTimeMs: number;
+  characterId: string | null;
   position: [number, number, number];
   velocity: [number, number, number];
   characterName: string | null;
   characterFileUrl: string | null;
+  characterActions?: RuntimeActionLink[];
   actionState: string;
   activeActionName: string | null;
   activeActionUrl: string | null;
 };
+
+type RuntimeActionLink = {
+  enabled?: boolean;
+  fileUrl?: string | null;
+  name?: string | null;
+  trigger?: string | null;
+};
+
+function actionNameMatches(action: RuntimeActionLink, terms: string[]) {
+  const lowerName = String(action.name ?? "").toLowerCase();
+  return terms.some((term) => lowerName.includes(term));
+}
+
+function pickRemoteAnimationUrl(
+  player: RemotePresencePlayer,
+  playerActions: RuntimeActionLink[],
+) {
+  if (player.activeActionUrl) return player.activeActionUrl;
+
+  const enabledActions = playerActions.filter((action) => action.enabled && action.fileUrl);
+  const state = String(player.actionState || "idle").toLowerCase();
+  const findByTrigger = (trigger: string, terms: string[] = []) =>
+    enabledActions.find((action) => action.trigger === trigger && (!terms.length || actionNameMatches(action, terms))) ??
+    enabledActions.find((action) => action.trigger === trigger);
+
+  if (state.includes("attack") || state.includes("slash") || state.includes("kick")) {
+    const attackTerms = state.includes("kick")
+      ? ["kick", "heavy", "3"]
+      : state.includes("slash")
+        ? ["slash", "combo", "2"]
+        : ["attack", "light", "1"];
+    return findByTrigger("attack", attackTerms)?.fileUrl ?? null;
+  }
+
+  if (state.includes("jump")) {
+    return findByTrigger("jump")?.fileUrl ?? null;
+  }
+
+  if (state.includes("block") || state.includes("hit")) {
+    return findByTrigger(state.includes("block") ? "block" : "hit")?.fileUrl ??
+      findByTrigger("idle")?.fileUrl ??
+      null;
+  }
+
+  if (state.includes("run") || state.includes("walk") || state.includes("move")) {
+    return findByTrigger("move")?.fileUrl ?? findByTrigger("walk")?.fileUrl ?? null;
+  }
+
+  return findByTrigger("idle")?.fileUrl ?? null;
+}
 
 // Camera controller that tracks the player smoothly
 function CameraController({ controlsRef }: { controlsRef: React.MutableRefObject<any> }) {
@@ -463,14 +521,17 @@ function ArrowProjectileLayer({ terrainScene }: { terrainScene: THREE.Object3D |
 
 function RemotePlayerAvatar({
   player,
+  playerActions,
   mapScaleRatio,
 }: {
   player: RemotePresencePlayer;
+  playerActions: RuntimeActionLink[];
   mapScaleRatio: number;
 }) {
   const groupRef = useRef<THREE.Group | null>(null);
   const targetPositionRef = useRef(new THREE.Vector3(...player.position));
   const currentPositionRef = useRef(new THREE.Vector3(...player.position));
+  const projectedVelocityRef = useRef(new THREE.Vector3());
   const targetYawRef = useRef(0);
   const initialPosition = useMemo(
     () => [...player.position] as [number, number, number],
@@ -478,6 +539,13 @@ function RemotePlayerAvatar({
   );
   const [modelScene, setModelScene] = useState<THREE.Object3D | null>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const animationActions = player.characterActions?.length
+    ? player.characterActions
+    : playerActions;
+  const remoteAnimationUrl = useMemo(
+    () => pickRemoteAnimationUrl(player, animationActions),
+    [animationActions, player],
+  );
 
   useEffect(() => {
     const packetAgeSeconds = THREE.MathUtils.clamp(
@@ -488,14 +556,14 @@ function RemotePlayerAvatar({
     targetPositionRef.current
       .fromArray(player.position)
       .addScaledVector(
-        new THREE.Vector3(...player.velocity),
+        projectedVelocityRef.current.fromArray(player.velocity),
         packetAgeSeconds,
       );
     const horizontalSpeed = Math.hypot(player.velocity[0], player.velocity[2]);
     if (horizontalSpeed > 0.08) {
       targetYawRef.current = Math.atan2(player.velocity[0], player.velocity[2]);
     }
-  }, [player.position, player.velocity]);
+  }, [player.position, player.serverTimeMs, player.velocity]);
 
   useEffect(() => {
     if (!modelScene) return;
@@ -542,11 +610,11 @@ function RemotePlayerAvatar({
           </mesh>
         )}
       </Suspense>
-      {modelScene && player.activeActionUrl ? (
+      {modelScene && remoteAnimationUrl ? (
         <Suspense fallback={null}>
           <AnimationActionPlayer
-            key={player.activeActionUrl}
-            animationUrl={player.activeActionUrl}
+            key={remoteAnimationUrl}
+            animationUrl={remoteAnimationUrl}
             mixerRef={mixerRef}
           />
         </Suspense>
@@ -565,9 +633,11 @@ function RemotePlayerAvatar({
 
 function RemotePlayerLayer({
   players,
+  playerActions,
   mapScaleRatio,
 }: {
   players: RemotePresencePlayer[];
+  playerActions: RuntimeActionLink[];
   mapScaleRatio: number;
 }) {
   return (
@@ -576,6 +646,114 @@ function RemotePlayerLayer({
         <RemotePlayerAvatar
           key={player.id}
           player={player}
+          playerActions={playerActions}
+          mapScaleRatio={mapScaleRatio}
+        />
+      ))}
+    </>
+  );
+}
+
+function ServerEnemyAvatar({
+  enemy,
+  mapScaleRatio,
+}: {
+  enemy: RealtimeEnemyState;
+  mapScaleRatio: number;
+}) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const targetPositionRef = useRef(new THREE.Vector3(...enemy.position));
+  const currentPositionRef = useRef(new THREE.Vector3(...enemy.position));
+  const targetYawRef = useRef(0);
+  const localEnemy = useMemo(
+    () => ({
+      id: enemy.id,
+      type: enemy.type,
+      position: enemy.position,
+      health: enemy.hp,
+      maxHealth: enemy.maxHp,
+      isDead: enemy.isDead,
+      actionState: enemy.actionState,
+    }),
+    [enemy],
+  );
+
+  useEffect(() => {
+    targetPositionRef.current.fromArray(enemy.position);
+    const horizontalSpeed = Math.hypot(enemy.velocity[0], enemy.velocity[2]);
+    if (horizontalSpeed > 0.05) {
+      targetYawRef.current = Math.atan2(enemy.velocity[0], enemy.velocity[2]);
+    }
+  }, [enemy.position, enemy.velocity]);
+
+  useFrame((_, delta) => {
+    const group = groupRef.current;
+    if (!group) return;
+    const alpha = 1 - Math.exp(-Math.max(delta, 0) * 10);
+    currentPositionRef.current.lerp(targetPositionRef.current, alpha);
+    group.position.copy(currentPositionRef.current);
+    const yawDelta = THREE.MathUtils.euclideanModulo(
+      targetYawRef.current - group.rotation.y + Math.PI,
+      Math.PI * 2,
+    ) - Math.PI;
+    group.rotation.y += yawDelta * (1 - Math.exp(-Math.max(delta, 0) * 9));
+  });
+
+  return (
+    <group ref={groupRef} position={enemy.position}>
+      <Suspense fallback={null}>
+        <CharacterEnemyVisual enemy={localEnemy} mapScaleRatio={mapScaleRatio} />
+      </Suspense>
+      {!enemy.isDead && enemy.hp < enemy.maxHp ? (
+        <Html position={[0, (enemy.type === "zombie_fantasy" ? 2.6 : 2.1) * mapScaleRatio, 0]} center>
+          <div className="enemy-health-bar-container">
+            <div
+              className="enemy-health-bar-fill"
+              style={{ width: `${(enemy.hp / enemy.maxHp) * 100}%` }}
+            />
+          </div>
+        </Html>
+      ) : null}
+    </group>
+  );
+}
+
+function ServerNpcAvatar({
+  npc,
+  mapScaleRatio,
+}: {
+  npc: RealtimeNpcState;
+  mapScaleRatio: number;
+}) {
+  return (
+    <group position={npc.position}>
+      <Suspense fallback={null}>
+        <NpcVisual mapScaleRatio={mapScaleRatio} />
+      </Suspense>
+    </group>
+  );
+}
+
+function ServerWorldLayer({
+  snapshot,
+  mapScaleRatio,
+}: {
+  snapshot: RealtimeWorldSnapshot;
+  mapScaleRatio: number;
+}) {
+  return (
+    <>
+      {snapshot.enemies.map((enemy) => (
+        <ServerEnemyAvatar
+          key={enemy.id}
+          enemy={enemy}
+          mapScaleRatio={mapScaleRatio}
+        />
+      ))}
+      {snapshot.npcs.map((npc) => (
+        <ServerNpcAvatar
+          key={npc.id}
+          npc={npc}
           mapScaleRatio={mapScaleRatio}
         />
       ))}
@@ -622,9 +800,13 @@ function AnimationAssetPreloader({ url }: { url: string }) {
 export function GameCanvas({
   playerActions = [],
   remotePlayers = [],
+  worldSnapshot = null,
+  onCombatAttack,
 }: {
   playerActions?: any[];
   remotePlayers?: RemotePresencePlayer[];
+  worldSnapshot?: RealtimeWorldSnapshot | null;
+  onCombatAttack?: (attack: RealtimeCombatAttack) => Promise<void> | void;
 }) {
   const controlsRef = useRef<any>(null);
   const [terrainScene, setTerrainScene] = useState<THREE.Object3D | null>(null);
@@ -640,6 +822,7 @@ export function GameCanvas({
   const hasPlayerCharacter = Boolean(activeLevel.playerCharacter?.fileUrl);
   const enemies = useGameStore((state) => state.enemies);
   const robotPosition = useGameStore((state) => state.robotPosition);
+  const useServerWorld = Boolean(worldSnapshot);
 
   const handleTerrainReady = useCallback((scene: THREE.Object3D) => {
     setTerrainScene(scene);
@@ -647,8 +830,10 @@ export function GameCanvas({
 
   // Initialize and spawn enemies
   useEffect(() => {
-    spawnEnemies();
-  }, [spawnEnemies]);
+    if (!useServerWorld) {
+      spawnEnemies();
+    }
+  }, [spawnEnemies, useServerWorld]);
 
   useEffect(() => {
     preload3DModel(activeLevel.mapModelUrl);
@@ -725,23 +910,35 @@ export function GameCanvas({
 
             {/* Playable Character */}
             {groundReady && hasPlayerCharacter ? (
-              <Player key={`player-${worldVersion}`} playerActions={playerActions} />
+              <Player
+                key={`player-${worldVersion}`}
+                playerActions={playerActions}
+                serverEnemies={worldSnapshot?.enemies ?? []}
+                onCombatAttack={onCombatAttack}
+              />
             ) : null}
 
             {/* Enemies & NPC Bots */}
-            {groundReady &&
+            {!useServerWorld && groundReady &&
               enemies.map((enemy) => (
                 <CharacterEnemyBot key={enemy.id} enemy={enemy} mapScaleRatio={mapScaleRatio} />
               ))}
-            {groundReady && activeLevel.robotSpawn ? (
+            {!useServerWorld && groundReady && activeLevel.robotSpawn ? (
               <NpcBot position={robotPosition} npcId="robot" />
             ) : null}
 
           </Physics>
+          {groundReady && worldSnapshot ? (
+            <ServerWorldLayer snapshot={worldSnapshot} mapScaleRatio={mapScaleRatio} />
+          ) : null}
 
           <BowTrajectoryLayer />
           <ArrowProjectileLayer terrainScene={terrainScene} />
-          <RemotePlayerLayer players={remotePlayers} mapScaleRatio={mapScaleRatio} />
+          <RemotePlayerLayer
+            players={remotePlayers}
+            playerActions={playerActions}
+            mapScaleRatio={mapScaleRatio}
+          />
 
           {/* Floating Damage Popup Numbers */}
           <FloatingDamageLayer />

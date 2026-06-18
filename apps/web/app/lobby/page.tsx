@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { listPublishedLevels } from "@/lib/model-store";
+import { LobbyAuthActions } from "@/components/auth/LobbyAuthActions";
 
 export const dynamic = "force-dynamic";
 
@@ -15,14 +16,7 @@ export default async function LobbyPage() {
           <h1>Published maps</h1>
           <p className="inline-text">Choose an online-ready map and enter the game.</p>
         </div>
-        <div className="inline-actions">
-          <Link className="button secondary" href={"/login" as Route}>
-            Login
-          </Link>
-          <Link className="button" href={"/register" as Route}>
-            Register
-          </Link>
-        </div>
+        <LobbyAuthActions />
       </section>
 
       {maps.length ? (

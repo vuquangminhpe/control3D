@@ -6,6 +6,7 @@ import { useGLTF, useFBX } from "@react-three/drei";
 import { FBXLoader, SkeletonUtils } from "three-stdlib";
 import { RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier";
 import * as THREE from "three";
+import type { RealtimeCombatAttack, RealtimeEnemyState } from "@control3d/shared/schemas/realtime";
 import { getEnemyRuntimePosition, useGameStore } from "@/store/gameStore";
 import { ModelLoader } from "@/components/3d/ModelLoader";
 import { log3DDebug } from "@/lib/3d/debug";
@@ -247,7 +248,15 @@ function buildBowTrajectory(origin: THREE.Vector3, velocity: THREE.Vector3, mapS
   return points;
 }
 
-export function Player({ playerActions = [] }: { playerActions?: any[] }) {
+export function Player({
+  playerActions = [],
+  serverEnemies = [],
+  onCombatAttack,
+}: {
+  playerActions?: any[];
+  serverEnemies?: RealtimeEnemyState[];
+  onCombatAttack?: (attack: RealtimeCombatAttack) => Promise<void> | void;
+}) {
   const rigidBodyRef = useRef<any>(null);
   const playerNodeRef = useRef<THREE.Group>(null);
   const initialPlayerPositionRef = useRef<[number, number, number]>([...useGameStore.getState().playerPosition]);
@@ -703,7 +712,17 @@ export function Player({ playerActions = [] }: { playerActions?: any[] }) {
     const gameState = useGameStore.getState();
     const selectedWeapon = gameState.selectedWeapon;
     const weaponHitbox = gameState.weaponLoadouts[selectedWeapon].hitbox;
-    const enemies = gameState.enemies;
+    const enemies = serverEnemies.length
+      ? serverEnemies.map((enemy) => ({
+          id: enemy.id,
+          type: enemy.type,
+          position: enemy.position,
+          health: enemy.hp,
+          maxHealth: enemy.maxHp,
+          isDead: enemy.isDead,
+          actionState: enemy.actionState,
+        }))
+      : gameState.enemies;
     const weaponForward = weaponForwardRef.current
       .set(0, 0, 1)
       .applyQuaternion(playerNodeRef.current.quaternion)
@@ -721,7 +740,9 @@ export function Player({ playerActions = [] }: { playerActions?: any[] }) {
     for (const enemy of enemies) {
       if (enemy.isDead) continue;
 
-      const runtimePos = getEnemyRuntimePosition(enemy.id) ?? enemy.position;
+      const runtimePos = serverEnemies.length
+        ? enemy.position
+        : getEnemyRuntimePosition(enemy.id) ?? enemy.position;
       const enemyPos = enemyPositionVecRef.current.fromArray(runtimePos);
       const toEnemy = toEnemyVecRef.current.copy(enemyPos).sub(playerPos);
       toEnemy.y = 0;
@@ -743,6 +764,22 @@ export function Player({ playerActions = [] }: { playerActions?: any[] }) {
     if (!closestHit) return;
 
     hasHitThisSwing.current = true;
+
+    if (serverEnemies.length && onCombatAttack) {
+      const mode =
+        actionState === "kick" ? "heavy" : actionState === "slash" ? "alt" : "light";
+      void Promise.resolve(onCombatAttack({
+        clientAttackId: `attack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        mode,
+        origin: [playerPos.x, playerPos.y, playerPos.z],
+        direction: [
+          weaponForward.x,
+          weaponForward.y,
+          weaponForward.z,
+        ],
+      })).catch(() => undefined);
+      return;
+    }
 
     const { damage, critChance } = combatProfileRef.current;
     const isCrit = Math.random() < critChance;

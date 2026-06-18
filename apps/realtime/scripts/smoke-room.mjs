@@ -132,6 +132,7 @@ function connectClient(name, joinToken) {
         resolve({
           name,
           socket,
+          events: state.events,
           send: (event) => socket.write(createClientFrame(event)),
           waitFor: (predicate, label, timeoutMs = 5_000) =>
             waitForEvent(state, predicate, `${name} ${label}`, timeoutMs),
@@ -144,6 +145,10 @@ function connectClient(name, joinToken) {
 
     socket.on("error", reject);
   });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForEvent(state, predicate, label, timeoutMs) {
@@ -206,8 +211,20 @@ async function run() {
         mapId,
         userId: "user-a",
         displayName: "Alice",
+        characterId: "character-knight",
         characterName: "Knight",
         characterFileUrl: "/knight.glb",
+        characterActions: [
+          {
+            id: "knight-idle",
+            name: "Knight Idle",
+            fileUrl: "/animations/knight-idle.fbx",
+            enabled: true,
+            trigger: "idle",
+            keyBinding: null,
+            durationMs: null,
+          },
+        ],
         isAdmin: false,
       }),
     );
@@ -217,6 +234,21 @@ async function run() {
         event.payload.self.displayName === "Alice",
       "join",
     );
+    const aliceWorld = await alice.waitFor(
+      (event) => event.type === "world:snapshot",
+      "world snapshot",
+    );
+    assert.equal(aliceWorld.payload.mapId, mapId);
+    assert.equal(aliceWorld.payload.enemies.length, 3);
+    assert.equal(aliceWorld.payload.npcs[0].id, "robot");
+    const aliceWorldTick = await alice.waitFor(
+      (event) =>
+        event.type === "world:snapshot" &&
+        event.payload.tick > aliceWorld.payload.tick,
+      "world simulation tick",
+    );
+    assert.equal(aliceWorldTick.payload.enemies[0].actionState, "run");
+    assert.ok(aliceWorldTick.payload.enemies[0].seq > 0);
 
     const bob = await connectClient(
       "bob",
@@ -224,8 +256,20 @@ async function run() {
         mapId,
         userId: "user-b",
         displayName: "Bob",
+        characterId: "character-mage",
         characterName: "Mage",
         characterFileUrl: "/mage.glb",
+        characterActions: [
+          {
+            id: "mage-run",
+            name: "Mage Run",
+            fileUrl: "/animations/mage-run.fbx",
+            enabled: true,
+            trigger: "move",
+            keyBinding: "W+A+S+D",
+            durationMs: null,
+          },
+        ],
         isAdmin: false,
       }),
     );
@@ -235,15 +279,19 @@ async function run() {
     );
     assert.equal(bobJoin.payload.players.length, 1);
     assert.equal(bobJoin.payload.players[0].displayName, "Alice");
+    assert.equal(bobJoin.payload.players[0].characterId, "character-knight");
     assert.equal(bobJoin.payload.players[0].seq, 0);
     assert.ok(bobJoin.payload.players[0].serverTimeMs > 0);
+    assert.equal(bobJoin.payload.players[0].characterActions[0].fileUrl, "/animations/knight-idle.fbx");
 
-    await alice.waitFor(
+    const bobPresence = await alice.waitFor(
       (event) =>
         event.type === "presence:update" &&
         event.payload.displayName === "Bob",
       "sees bob",
     );
+    assert.equal(bobPresence.payload.characterId, "character-mage");
+    assert.equal(bobPresence.payload.characterActions[0].fileUrl, "/animations/mage-run.fbx");
 
     bob.send({
       type: "presence:update",
@@ -281,6 +329,91 @@ async function run() {
     assert.deepEqual(bobMove.payload.velocity, [2, 0, 2]);
     assert.ok(bobMove.payload.seq >= 2);
     assert.ok(bobMove.payload.serverTimeMs > 0);
+
+    alice.send({
+      type: "presence:update",
+      payload: {
+        position: [3.5, 0, 4.5],
+        velocity: [0, 0, 0],
+        characterName: "Knight",
+        characterFileUrl: "/knight.glb",
+        actionState: "attack",
+        activeActionName: "Knight Slash",
+        activeActionUrl: "/animations/knight-slash.fbx",
+      },
+    });
+    const aliceDamage = await alice.waitFor(
+      (event) =>
+        event.type === "player:damage" &&
+        event.payload.userId === "user-a" &&
+        event.payload.amount === 5,
+      "receives server enemy damage",
+    );
+    assert.equal(aliceDamage.payload.hp, 95);
+    assert.equal(aliceDamage.payload.maxHp, 100);
+
+    alice.send({
+      type: "combat:attack",
+      payload: {
+        clientAttackId: "smoke-attack-1",
+        mode: "light",
+        origin: [3.5, 0, 4.5],
+        direction: [1, 0, 1],
+      },
+    });
+    const bobHit = await bob.waitFor(
+      (event) =>
+        event.type === "combat:hit" &&
+        event.payload.clientAttackId === "smoke-attack-1",
+      "receives server combat hit",
+    );
+    assert.equal(bobHit.payload.damage, 18);
+    assert.equal(bobHit.payload.hp, 22);
+    const combatWorld = await bob.waitFor(
+      (event) =>
+        event.type === "world:snapshot" &&
+        event.payload.enemies.some(
+          (enemy) => enemy.id === bobHit.payload.enemyId && enemy.hp === 22,
+        ),
+      "receives combat world snapshot",
+    );
+    assert.ok(combatWorld.payload.tick > aliceWorldTick.payload.tick);
+
+    await delay(500);
+    alice.send({
+      type: "combat:attack",
+      payload: {
+        clientAttackId: "smoke-kill-1",
+        mode: "heavy",
+        origin: [3.5, 0, 4.5],
+        direction: [1, 0, 1],
+      },
+    });
+    const killHit = await bob.waitFor(
+      (event) =>
+        event.type === "combat:hit" &&
+        event.payload.clientAttackId === "smoke-kill-1" &&
+        event.payload.isDead,
+      "receives server kill hit",
+    );
+    assert.equal(killHit.payload.hp, 0);
+    const reward = await bob.waitFor(
+      (event) =>
+        event.type === "reward:points" &&
+        event.payload.enemyId === killHit.payload.enemyId,
+      "receives kill reward",
+    );
+    assert.equal(reward.payload.amount, 100);
+    assert.equal(reward.payload.transactionId, `kill:${mapId}:${killHit.payload.enemyId}`);
+    await delay(200);
+    assert.equal(
+      bob.events.filter(
+        (event) =>
+          event.type === "reward:points" &&
+          event.payload.enemyId === killHit.payload.enemyId,
+      ).length,
+      1,
+    );
 
     alice.send({
       type: "chat:send",

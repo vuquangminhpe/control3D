@@ -1637,6 +1637,7 @@
   text-align: right;
   display: flex;
   flex-direction: column;
+  min-width: 74px;
 }
 
 .hud-score-card span {
@@ -1651,6 +1652,124 @@
   font-weight: 900;
   color: #00ffd5;
   text-shadow: 0 0 12px rgba(0, 255, 213, 0.4);
+}
+
+.hud-score-card small {
+  color: rgba(0, 255, 213, 0.72);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.character-select-panel {
+  position: absolute;
+  top: 118px;
+  right: 24px;
+  z-index: 12;
+  width: min(320px, calc(100vw - 48px));
+  max-height: min(380px, calc(100vh - 170px));
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+  pointer-events: auto;
+  background: rgba(12, 17, 32, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(14px);
+}
+
+.character-select-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.character-select-panel header strong {
+  color: #00ffd5;
+  font-size: 12px;
+}
+
+.character-select-list {
+  display: grid;
+  gap: 7px;
+}
+
+.character-select-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 52px;
+  padding: 9px 10px;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.character-select-item.active {
+  color: #fff;
+  border-color: rgba(0, 255, 213, 0.58);
+  background: rgba(0, 255, 213, 0.12);
+}
+
+.character-select-item.locked:not(.active) {
+  opacity: 0.78;
+}
+
+.character-select-item span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.character-select-item strong,
+.character-select-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-select-item strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.character-select-item small,
+.character-select-item em {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+.character-buy-button {
+  min-height: 38px;
+  color: #04110e;
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+  background: #00ffd5;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.character-select-error {
+  margin: 0;
+  color: #ffb4a8;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 /* 2. Combo Meter */

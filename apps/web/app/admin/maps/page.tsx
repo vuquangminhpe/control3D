@@ -1,5 +1,10 @@
 import { AdminMapsClient } from "@/components/admin/AdminMapsClient";
+import { AdminRouteGuard } from "@/components/auth/AdminRouteGuard";
 
 export default function AdminMapsPage() {
-  return <AdminMapsClient />;
+  return (
+    <AdminRouteGuard>
+      <AdminMapsClient />
+    </AdminRouteGuard>
+  );
 }

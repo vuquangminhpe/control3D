@@ -4,8 +4,18 @@ export type RealtimeJoinTokenPayload = {
   mapId: string;
   userId: string;
   displayName: string;
+  characterId: string | null;
   characterName: string | null;
   characterFileUrl: string | null;
+  characterActions: Array<{
+    id: string;
+    name: string;
+    fileUrl: string;
+    enabled: boolean;
+    trigger: string;
+    keyBinding: string | null;
+    durationMs: number | null;
+  }>;
   isAdmin: boolean;
   exp: number;
 };

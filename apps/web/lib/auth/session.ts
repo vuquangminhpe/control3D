@@ -1,6 +1,4 @@
 import {
-  countAdmins,
-  createAdmin,
   createAuthSession,
   createUser,
   getAdminByEmail,
@@ -14,6 +12,7 @@ import {
   revokeAuthSession,
   revokeAuthSessionFamily,
   rotateAuthSession,
+  upsertAdminCredentials,
   type AdminRecord,
   type AuthSubjectType,
   type UserRecord,
@@ -125,14 +124,12 @@ export async function loginUser(input: { email: string; password: string; reques
 }
 
 export async function ensureDefaultAdmin() {
-  if ((await countAdmins()) > 0) return;
-
   const email = process.env.CONTROL3D_DEFAULT_ADMIN_EMAIL;
   const password = process.env.CONTROL3D_DEFAULT_ADMIN_PASSWORD;
   if (!email || !password) return;
 
   const passwordHash = await hashPassword(password);
-  await createAdmin({
+  await upsertAdminCredentials({
     email,
     passwordHash,
     role: "super_admin",

@@ -50,6 +50,7 @@ import {
 } from "@/store/gameStore";
 
 type WorkbenchTab = "play" | "maps" | "editor" | "story";
+type ViewerRole = "guest" | "user" | "admin";
 type PlacementTool = "player" | "object" | "enemy_low" | "enemy_fantasy" | "npc";
 type EditableLevelDraft = ReturnType<typeof buildEditableLevel>;
 type AssetLibraryItem = {
@@ -73,6 +74,20 @@ type CharacterActionLink = {
   trigger: "none" | "attack" | "talk" | "move" | "custom" | "crouch" | "jump" | "idle";
   keyBinding: string | null;
   durationMs?: number | null;
+};
+
+type PlayableCharacterOption = {
+  id: string;
+  characterId: string;
+  modelId: string;
+  name: string;
+  fileUrl: string;
+  format?: string | null;
+  isDefault: boolean;
+  pointPrice: number;
+  owned: boolean;
+  locked: boolean;
+  canUse: boolean;
 };
 
 const DEFAULT_MAP_URL = "";
@@ -253,6 +268,78 @@ function getCharacterActionsFromAsset(asset: AssetLibraryItem | null | undefined
   return actions.filter((action): action is CharacterActionLink => (
     Boolean(action && typeof action === "object" && "id" in action && "name" in action)
   ));
+}
+
+function getDefaultPlayableMapCharacter(level: GameLevel | null | undefined) {
+  const playable = (level?.mapCharacters ?? [])
+    .filter((entry) => entry.role === "playable")
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return playable.find((entry) => entry.isDefault) ?? playable[0] ?? null;
+}
+
+function CharacterSelectPanel({
+  balance,
+  characters,
+  error,
+  onBuy,
+  onSelect,
+  selectedCharacterId,
+}: {
+  balance: number | null;
+  characters: PlayableCharacterOption[];
+  error: string | null;
+  onBuy: (character: PlayableCharacterOption) => void;
+  onSelect: (characterId: string) => void;
+  selectedCharacterId: string | null;
+}) {
+  if (!characters.length) return null;
+
+  return (
+    <aside className="character-select-panel">
+      <header>
+        <span>Character</span>
+        <strong>{balance === null ? "Points --" : `${balance} pts`}</strong>
+      </header>
+      <div className="character-select-list">
+        {characters.map((character) => {
+          const selected = selectedCharacterId === character.characterId;
+          return (
+            <button
+              className={`character-select-item${selected ? " active" : ""}${character.locked ? " locked" : ""}`}
+              key={character.characterId}
+              onClick={() => onSelect(character.characterId)}
+              type="button"
+            >
+              <span>
+                <strong>{character.name}</strong>
+                <small>
+                  {character.isDefault
+                    ? "Default"
+                    : character.pointPrice > 0
+                      ? `${character.pointPrice} pts`
+                      : "Free"}
+                </small>
+              </span>
+              {character.canUse ? <em>Use</em> : <em>Locked</em>}
+            </button>
+          );
+        })}
+      </div>
+      {characters.find((entry) => entry.characterId === selectedCharacterId)?.locked ? (
+        <button
+          className="character-buy-button"
+          onClick={() => {
+            const selected = characters.find((entry) => entry.characterId === selectedCharacterId);
+            if (selected) onBuy(selected);
+          }}
+          type="button"
+        >
+          Buy character
+        </button>
+      ) : null}
+      {error ? <p className="character-select-error">{error}</p> : null}
+    </aside>
+  );
 }
 
 function writeCharacterActionsToCustomProps(
@@ -2797,11 +2884,44 @@ export function GameWorkbench() {
   const [chatDisplayName, setChatDisplayName] = useState("Player");
   const [isChatConnected, setIsChatConnected] = useState(false);
   const [remotePlayers, setRemotePlayers] = useState<RemotePresencePlayer[]>([]);
+  const [viewerRole, setViewerRole] = useState<ViewerRole>("guest");
+  const [playableCharacters, setPlayableCharacters] = useState<PlayableCharacterOption[]>([]);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  const [pointBalance, setPointBalance] = useState<number | null>(null);
+  const [characterSelectError, setCharacterSelectError] = useState<string | null>(null);
   const allowRealtimeFallback =
     process.env.NODE_ENV !== "production" &&
     process.env.NEXT_PUBLIC_CONTROL3D_ALLOW_REALTIME_FALLBACK !== "false";
 
-  const selectedPlayerCharacter = draft?.playerCharacter;
+  const realtimePlayerCharacter =
+    playableCharacters.find((entry) => entry.characterId === selectedCharacterId) ??
+    getDefaultPlayableMapCharacter(activeLevel);
+  const selectedPlayableCharacter = playableCharacters.find(
+    (entry) => entry.characterId === selectedCharacterId,
+  );
+  const selectedCharacterCanUse = selectedPlayableCharacter?.canUse ?? true;
+  const realtimeCharacterDisplayName =
+    realtimePlayerCharacter && "displayLabel" in realtimePlayerCharacter
+      ? realtimePlayerCharacter.displayLabel || realtimePlayerCharacter.name
+      : realtimePlayerCharacter?.name;
+  const realtimeCharacterName =
+    realtimeCharacterDisplayName ||
+    activeLevel?.playerCharacter?.name ||
+    null;
+  const realtimeCharacterFileUrl =
+    realtimePlayerCharacter?.fileUrl ?? activeLevel?.playerCharacter?.fileUrl ?? null;
+  const realtimeCharacterId =
+    realtimePlayerCharacter?.characterId ?? activeLevel?.playerCharacter?.modelId ?? null;
+
+  const selectedPlayerCharacter =
+    selectedPlayableCharacter?.canUse
+      ? ({
+          modelId: selectedPlayableCharacter.modelId,
+          name: selectedPlayableCharacter.name,
+          fileUrl: selectedPlayableCharacter.fileUrl,
+          format: selectedPlayableCharacter.format ?? undefined,
+        } satisfies LevelCharacter)
+      : draft?.playerCharacter;
   const selectedPlayerAsset = selectedPlayerCharacter
     ? assetLibrary.find((asset) => asset.id === selectedPlayerCharacter.modelId)
     : null;
@@ -2832,17 +2952,126 @@ export function GameWorkbench() {
     playerPositionRef.current = playerPosition;
   }, [playerPosition]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPlayableCharacters() {
+      if (!activeLevel?.id || activeLevel.id === "empty-map") {
+        setPlayableCharacters([]);
+        setSelectedCharacterId(null);
+        setPointBalance(null);
+        return;
+      }
+
+      const fallbackCharacters = (activeLevel.mapCharacters ?? [])
+        .filter((entry) => entry.role === "playable")
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((entry): PlayableCharacterOption => ({
+          id: entry.id,
+          characterId: entry.characterId,
+          modelId: entry.modelId,
+          name: entry.displayLabel || entry.name,
+          fileUrl: entry.fileUrl,
+          format: entry.format,
+          isDefault: entry.isDefault,
+          pointPrice: entry.pointPrice,
+          owned: entry.isDefault || entry.pointPrice <= 0,
+          locked: false,
+          canUse: true,
+        }));
+
+      try {
+        const response = await fetch(
+          `/api/maps/${encodeURIComponent(activeLevel.id)}/characters`,
+          { cache: "no-store" },
+        );
+        const payload = await response.json().catch(() => null);
+        const rows = response.ok && payload?.success && Array.isArray(payload.data)
+          ? payload.data as PlayableCharacterOption[]
+          : fallbackCharacters;
+        if (!cancelled) {
+          const normalized = rows.length ? rows : fallbackCharacters;
+          setPlayableCharacters(normalized);
+          const nextSelected =
+            normalized.find((entry) => entry.canUse && entry.isDefault) ??
+            normalized.find((entry) => entry.canUse) ??
+            normalized[0] ??
+            null;
+          setSelectedCharacterId((current) =>
+            current && normalized.some((entry) => entry.characterId === current)
+              ? current
+              : nextSelected?.characterId ?? null,
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setPlayableCharacters(fallbackCharacters);
+          setSelectedCharacterId(
+            fallbackCharacters.find((entry) => entry.isDefault)?.characterId ??
+              fallbackCharacters[0]?.characterId ??
+              null,
+          );
+        }
+      }
+
+      try {
+        const response = await fetch("/api/users/me/points", { cache: "no-store" });
+        const payload = await response.json().catch(() => null);
+        if (!cancelled && response.ok && payload?.success) {
+          setPointBalance(Number(payload.data?.balance ?? 0));
+        }
+      } catch {
+        if (!cancelled) setPointBalance(null);
+      }
+    }
+
+    void loadPlayableCharacters();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLevel]);
+
   const realtimeRoom = useRealtimeGameRoom({
-    active: activeTab === "play",
+    active: activeTab === "play" && selectedCharacterCanUse,
     mapId: activeLevel?.id,
     playerPosition,
     playerVelocity,
-    characterName: activeLevel?.playerCharacter?.name ?? null,
-    characterFileUrl: activeLevel?.playerCharacter?.fileUrl ?? null,
+    characterId: realtimeCharacterId,
+    characterName: realtimeCharacterName,
+    characterFileUrl: realtimeCharacterFileUrl,
     actionState: playerActionState,
     activeActionName: realtimeFallbackAction?.name ?? playerActionState,
     activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
   });
+
+  const buySelectedCharacter = useCallback(
+    async (character: PlayableCharacterOption) => {
+      if (!activeLevel?.id || activeLevel.id === "empty-map") return;
+      setCharacterSelectError(null);
+      try {
+        const response = await fetch(
+          `/api/maps/${encodeURIComponent(activeLevel.id)}/characters/${encodeURIComponent(character.characterId)}/buy`,
+          { method: "POST" },
+        );
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error ?? "Unable to buy character");
+        }
+        setPointBalance(Number(payload.data?.balanceAfter ?? pointBalance ?? 0));
+        setPlayableCharacters((current) =>
+          current.map((entry) =>
+            entry.characterId === character.characterId
+              ? { ...entry, owned: true, locked: false, canUse: true }
+              : entry,
+          ),
+        );
+        setSelectedCharacterId(character.characterId);
+      } catch (error) {
+        setCharacterSelectError(error instanceof Error ? error.message : "Unable to buy character");
+      }
+    },
+    [activeLevel?.id, pointBalance],
+  );
 
   const setActiveGameplayAction = useGameStore((state) => state.setActiveGameplayAction);
 
@@ -2989,6 +3218,7 @@ export function GameWorkbench() {
           if (!cancelled && nextName) {
             setChatDisplayName(String(nextName));
             setIsChatConnected(true);
+            setViewerRole(admin ? "admin" : "user");
           }
           return;
         } catch {
@@ -2998,6 +3228,7 @@ export function GameWorkbench() {
 
       if (!cancelled) {
         setIsChatConnected(false);
+        setViewerRole("guest");
       }
     }
 
@@ -3006,6 +3237,14 @@ export function GameWorkbench() {
       cancelled = true;
     };
   }, []);
+
+  const isAdminViewer = viewerRole === "admin";
+
+  useEffect(() => {
+    if (!isAdminViewer && activeTab !== "play") {
+      setActiveTab("play");
+    }
+  }, [activeTab, isAdminViewer]);
 
   const loadChatMessages = useCallback(async (mapId: string) => {
     const response = await fetch(
@@ -3101,8 +3340,8 @@ export function GameWorkbench() {
     const heartbeatBody = () => ({
       position: playerPositionRef.current,
       velocity: playerVelocity,
-      characterName: activeLevel.playerCharacter?.name ?? null,
-      characterFileUrl: activeLevel.playerCharacter?.fileUrl ?? null,
+      characterName: realtimeCharacterName,
+      characterFileUrl: realtimeCharacterFileUrl,
       actionState: playerActionState,
       activeActionName: realtimeFallbackAction?.name ?? playerActionState,
       activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
@@ -3138,12 +3377,12 @@ export function GameWorkbench() {
     };
   }, [
     activeLevel?.id,
-    activeLevel?.playerCharacter?.fileUrl,
-    activeLevel?.playerCharacter?.name,
     activeTab,
     allowRealtimeFallback,
     playerActionState,
     playerVelocity,
+    realtimeCharacterFileUrl,
+    realtimeCharacterName,
     realtimeFallbackAction?.fileUrl,
     realtimeFallbackAction?.name,
     realtimeRoom.connected,
@@ -3159,6 +3398,9 @@ export function GameWorkbench() {
     : allowRealtimeFallback
       ? remotePlayers
       : [];
+  const effectiveWorldSnapshot = realtimeRoom.connected
+    ? realtimeRoom.worldSnapshot
+    : null;
   const effectiveChatConnected =
     realtimeRoom.connected || (allowRealtimeFallback && isChatConnected);
   const effectiveChatDisplayName = realtimeRoom.connected
@@ -3250,19 +3492,22 @@ export function GameWorkbench() {
     }
   };
 
-  const showStoryTab = !!draft;
+  const showStoryTab = isAdminViewer && !!draft;
+  const workbenchTabs: Array<[WorkbenchTab, string]> = isAdminViewer
+    ? [
+        ["play", "Play Game"],
+        ["maps", "All Games"],
+        ["editor", "Map Editor"],
+        ...(showStoryTab ? [["story", "Story Graph"] as [WorkbenchTab, string]] : []),
+      ]
+    : [["play", "Play Game"]];
 
   return (
     <div
       className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}${activeTab === "story" ? " game-container-story" : ""}`}
     >
       <nav className="game-workbench-nav">
-        {[
-          ["play", "Play Game"],
-          ["maps", "All Games"],
-          ["editor", "Map Editor"],
-          ...(showStoryTab ? [["story", "Story Graph"]] : []),
-        ].map(([id, label]) => (
+        {workbenchTabs.map(([id, label]) => (
           <button
             className={activeTab === id ? "active" : ""}
             key={id}
@@ -3289,14 +3534,28 @@ export function GameWorkbench() {
           <GameCanvas
             playerActions={selectedPlayerActions}
             remotePlayers={effectiveRemotePlayers}
+            worldSnapshot={effectiveWorldSnapshot}
+            onCombatAttack={
+              realtimeRoom.connected ? realtimeRoom.sendCombatAttack : undefined
+            }
           />
           <HUD />
           <DialogueSystem />
-          <ManualActionConfigPanel
-            actions={selectedPlayerActions}
-            activeActionId={activeGameplayActionId}
-            onTriggerAction={triggerGameplayAction}
+          <CharacterSelectPanel
+            balance={pointBalance}
+            characters={playableCharacters}
+            error={characterSelectError}
+            onBuy={buySelectedCharacter}
+            onSelect={setSelectedCharacterId}
+            selectedCharacterId={selectedCharacterId}
           />
+          {isAdminViewer ? (
+            <ManualActionConfigPanel
+              actions={selectedPlayerActions}
+              activeActionId={activeGameplayActionId}
+              onTriggerAction={triggerGameplayAction}
+            />
+          ) : null}
           <GameChatPanel
             connected={effectiveChatConnected}
             displayName={effectiveChatDisplayName}
@@ -3306,7 +3565,7 @@ export function GameWorkbench() {
           />
         </div>
       )}
-      {activeTab === "maps" && (
+      {isAdminViewer && activeTab === "maps" && (
         <MapsPanel
           onNewMap={() => {
             void createNewMap();
@@ -3314,7 +3573,7 @@ export function GameWorkbench() {
           onPlay={openPlay}
         />
       )}
-      {activeTab === "editor" && draft && (
+      {isAdminViewer && activeTab === "editor" && draft && (
         <LevelEditorPanel
           onPlay={openPlay}
           draft={draft}
@@ -3324,7 +3583,7 @@ export function GameWorkbench() {
           saveLevel={saveLevel}
         />
       )}
-      {activeTab === "story" && draft && (
+      {isAdminViewer && activeTab === "story" && draft && (
         <div style={{ height: "calc(100vh - 50px)" }}>
           <StoryGraphPanel
             assetLibrary={assetLibrary}

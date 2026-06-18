@@ -26,7 +26,7 @@ type VisualProps = {
   mapScaleRatio: number;
 };
 
-function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
+export function CharacterEnemyVisual({ enemy, mapScaleRatio }: VisualProps) {
   const modelUrl = useMemo(() => {
     return enemy.type === "zombie_fantasy"
       ? "/models/zombie_fantasy_animated.glb"
@@ -252,7 +252,7 @@ export function CharacterEnemyBot({ enemy, mapScaleRatio }: BotProps) {
   );
 }
 
-function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
+export function NpcVisual({ mapScaleRatio }: { mapScaleRatio: number }) {
   const { scene, animations } = useGLTF("/models/robot_tuan_tra_NPC.glb", "https://www.gstatic.com/draco/v1/decoders/");
 
   const clonedScene = useMemo(() => {

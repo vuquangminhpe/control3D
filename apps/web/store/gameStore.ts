@@ -474,6 +474,13 @@ interface GameState {
   // Game Status
   status: GameStatus;
   score: number;
+  serverPointBalance: number | null;
+  lastServerReward: {
+    enemyId: string;
+    amount: number;
+    balanceAfter: number | null;
+    transactionId: string;
+  } | null;
   level: number;
   xp: number;
   nextLevelXp: number;
@@ -514,12 +521,21 @@ interface GameState {
   // Actions
   startGame: () => void;
   setMapScaleRatio: (ratio: number) => void;
+  applyServerPointReward: (reward: {
+    enemyId: string;
+    amount: number;
+    balanceAfter: number | null;
+    transactionId: string;
+    duplicate: boolean;
+  }) => void;
+  clearServerPointSnapshot: () => void;
   setActiveGameplayAction: (url: string | null, name: string | null) => void;
   setPlayerActionState: (state: string) => void;
   updatePlayerPosition: (pos: [number, number, number]) => void;
   updatePlayerVelocity: (vel: [number, number, number]) => void;
   setPlayerTargetMove: (target: [number, number, number] | null) => void;
   damagePlayer: (amount: number) => void;
+  applyServerPlayerDamage: (damage: { amount: number; hp: number; maxHp: number }) => void;
   healPlayer: (amount: number) => void;
   gainXp: (amount: number) => void;
   triggerAttackStart: (combo: number) => void;
@@ -827,6 +843,8 @@ function runGraphLogic(
 export const useGameStore = create<GameState>((set, get) => ({
   status: "playing",
   score: 0,
+  serverPointBalance: null,
+  lastServerReward: null,
   level: 1,
   xp: 0,
   nextLevelXp: 100,
@@ -865,6 +883,25 @@ export const useGameStore = create<GameState>((set, get) => ({
     Math.abs(state.mapScaleRatio - ratio) < 0.001 ? state : { mapScaleRatio: ratio }
   )),
 
+  applyServerPointReward: (reward) => set((state) => ({
+    serverPointBalance:
+      reward.balanceAfter ??
+      (state.serverPointBalance === null || reward.duplicate
+        ? state.serverPointBalance
+        : state.serverPointBalance + reward.amount),
+    lastServerReward: {
+      enemyId: reward.enemyId,
+      amount: reward.amount,
+      balanceAfter: reward.balanceAfter,
+      transactionId: reward.transactionId,
+    },
+  })),
+
+  clearServerPointSnapshot: () => set({
+    serverPointBalance: null,
+    lastServerReward: null,
+  }),
+
   setActiveGameplayAction: (url, name) => set({
     activeGameplayActionUrl: url,
     activeGameplayActionName: name,
@@ -878,6 +915,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((state) => ({
       status: "playing",
       score: 0,
+      serverPointBalance: null,
+      lastServerReward: null,
       level: 1,
       xp: 0,
       nextLevelXp: 100,
@@ -921,6 +960,24 @@ export const useGameStore = create<GameState>((set, get) => ({
       };
     });
     get().addDamageNumber(amount, [currentPosition[0], currentPosition[1] + 2.2, currentPosition[2]], false);
+  },
+
+  applyServerPlayerDamage: (damage) => {
+    const currentPosition = get().playerPosition;
+    const nextHp = Math.max(0, Math.min(damage.hp, damage.maxHp));
+    set((state) => ({
+      playerHp: nextHp,
+      playerMaxHp: damage.maxHp,
+      status: nextHp <= 0 ? "game_over" : state.status,
+      playerTargetMove: nextHp <= 0 ? null : state.playerTargetMove,
+      isPlayerAttacking: nextHp <= 0 ? false : state.isPlayerAttacking,
+      comboCount: nextHp <= 0 ? 0 : state.comboCount,
+    }));
+    get().addDamageNumber(
+      damage.amount,
+      [currentPosition[0], currentPosition[1] + 2.2, currentPosition[2]],
+      false,
+    );
   },
 
   healPlayer: (amount) => {
@@ -1140,6 +1197,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       playerActionState: "idle",
       activeGameplayActionUrl: null,
       activeGameplayActionName: null,
+      serverPointBalance: null,
+      lastServerReward: null,
       robotPosition: [...activeLevel.robotSpawn],
       floatingDamages: [],
       bowAim: EMPTY_BOW_AIM,

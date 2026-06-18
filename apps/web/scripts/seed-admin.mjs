@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, scrypt as scryptCallback } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
@@ -8,8 +8,33 @@ const scrypt = promisify(scryptCallback);
 const keyLength = 64;
 
 const appRoot = path.resolve(import.meta.dirname, "..");
+const repoRoot = path.resolve(appRoot, "..", "..");
 const dataDir = path.join(appRoot, "data");
 const dbPath = path.join(dataDir, "control3d.sqlite");
+
+function loadLocalEnv() {
+  const envPath = path.join(repoRoot, ".env.local");
+  if (!existsSync(envPath)) return;
+
+  for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) continue;
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] ??= value;
+  }
+}
+
+loadLocalEnv();
 
 const email = (
   process.env.CONTROL3D_DEFAULT_ADMIN_EMAIL ?? "admin@example.com"
@@ -54,16 +79,16 @@ if (existing) {
   db.prepare(
     `
       UPDATE admins
-      SET role = 'super_admin',
+      SET password_hash = ?,
+          role = 'super_admin',
           permissions_json = ?,
           is_active = 1,
           updated_at = ?
       WHERE email = ?
     `,
-  ).run(JSON.stringify(permissions), new Date().toISOString(), email);
+  ).run(await hashPassword(password), JSON.stringify(permissions), new Date().toISOString(), email);
 
-  console.log(`Admin already exists and was ensured active: ${email}`);
-  console.log("Password was not changed. Delete the row or set a new password manually if needed.");
+  console.log(`Admin ensured active and password synced: ${email}`);
   db.close();
   process.exit(0);
 }

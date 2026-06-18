@@ -4,8 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   realtimeJoinIntentSchema,
   realtimeServerEventSchema,
+  type RealtimeCombatAttack,
   type RealtimePresencePlayer,
+  type RealtimeWorldSnapshot,
 } from "@control3d/shared/schemas/realtime";
+import { useGameStore } from "@/store/gameStore";
 import type { GameChatMessage } from "./GameChatPanel";
 
 type UseRealtimeGameRoomInput = {
@@ -13,6 +16,7 @@ type UseRealtimeGameRoomInput = {
   mapId: string | null | undefined;
   playerPosition: [number, number, number];
   playerVelocity: [number, number, number];
+  characterId: string | null;
   characterName: string | null;
   characterFileUrl: string | null;
   actionState: string;
@@ -36,7 +40,7 @@ function upsertPlayer(
 ) {
   const index = players.findIndex((player) => player.id === nextPlayer.id);
   if (index < 0) return [...players, nextPlayer];
-  if ((nextPlayer.seq ?? 0) < (players[index].seq ?? 0)) return players;
+  if ((nextPlayer.seq ?? 0) <= (players[index].seq ?? 0)) return players;
   const nextPlayers = [...players];
   nextPlayers[index] = nextPlayer;
   return nextPlayers;
@@ -71,6 +75,7 @@ export function useRealtimeGameRoom({
   mapId,
   playerPosition,
   playerVelocity,
+  characterId,
   characterName,
   characterFileUrl,
   actionState,
@@ -89,12 +94,15 @@ export function useRealtimeGameRoom({
   });
   const remotePlayersRef = useRef<RealtimePresencePlayer[]>([]);
   const remotePlayersFrameRef = useRef<number | null>(null);
+  const selfUserIdRef = useRef<string | null>(null);
+  const worldSnapshotRef = useRef<RealtimeWorldSnapshot | null>(null);
   const lastSentPresenceRef = useRef<{
     payload: PresencePayload;
     sentAt: number;
   } | null>(null);
   const [connected, setConnected] = useState(false);
   const [remotePlayers, setRemotePlayers] = useState<RealtimePresencePlayer[]>([]);
+  const [worldSnapshot, setWorldSnapshot] = useState<RealtimeWorldSnapshot | null>(null);
   const [messages, setMessages] = useState<GameChatMessage[]>([]);
   const [selfDisplayName, setSelfDisplayName] = useState("Player");
 
@@ -151,8 +159,12 @@ export function useRealtimeGameRoom({
     if (!active || !mapId || mapId === "empty-map") {
       socketRef.current?.close();
       socketRef.current = null;
+      selfUserIdRef.current = null;
+      useGameStore.getState().clearServerPointSnapshot();
       setConnected(false);
       replaceRemotePlayers([]);
+      worldSnapshotRef.current = null;
+      setWorldSnapshot(null);
       setMessages([]);
       return;
     }
@@ -186,7 +198,11 @@ export function useRealtimeGameRoom({
       try {
         const response = await fetch(
           `/api/maps/${encodeURIComponent(roomMapId)}/join-intent`,
-          { method: "POST" },
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ characterId }),
+          },
         );
         const payload = await response.json().catch(() => null);
         const parsed = realtimeJoinIntentSchema.safeParse(payload?.data);
@@ -199,6 +215,7 @@ export function useRealtimeGameRoom({
         const nextSocket = new WebSocket(wsUrl);
         socket = nextSocket;
         socketRef.current = nextSocket;
+        useGameStore.getState().clearServerPointSnapshot();
 
         nextSocket.onopen = () => {
           reconnectAttempts = 0;
@@ -248,6 +265,7 @@ export function useRealtimeGameRoom({
           const serverEvent = parsedEvent.data;
 
           if (serverEvent.type === "room:joined") {
+            selfUserIdRef.current = serverEvent.payload.self.userId;
             setSelfDisplayName(serverEvent.payload.self.displayName);
             replaceRemotePlayers(serverEvent.payload.players);
             setMessages(serverEvent.payload.messages);
@@ -263,6 +281,36 @@ export function useRealtimeGameRoom({
           }
           if (serverEvent.type === "chat:message") {
             setMessages((current) => [...current.slice(-59), serverEvent.payload]);
+            return;
+          }
+          if (serverEvent.type === "combat:hit") {
+            const enemy = worldSnapshotRef.current?.enemies.find(
+              (entry) => entry.id === serverEvent.payload.enemyId,
+            );
+            if (enemy) {
+              useGameStore.getState().addDamageNumber(
+                serverEvent.payload.damage,
+                [enemy.position[0], enemy.position[1] + 2.1, enemy.position[2]],
+                false,
+              );
+            }
+            return;
+          }
+          if (serverEvent.type === "world:snapshot") {
+            worldSnapshotRef.current = serverEvent.payload;
+            setWorldSnapshot(serverEvent.payload);
+            return;
+          }
+          if (serverEvent.type === "reward:points") {
+            if (serverEvent.payload.userId === selfUserIdRef.current) {
+              useGameStore.getState().applyServerPointReward(serverEvent.payload);
+            }
+            return;
+          }
+          if (serverEvent.type === "player:damage") {
+            if (serverEvent.payload.userId === selfUserIdRef.current) {
+              useGameStore.getState().applyServerPlayerDamage(serverEvent.payload);
+            }
           }
         };
 
@@ -300,9 +348,12 @@ export function useRealtimeGameRoom({
         socketRef.current = null;
       }
       lastSentPresenceRef.current = null;
+      selfUserIdRef.current = null;
+      worldSnapshotRef.current = null;
+      setWorldSnapshot(null);
       setConnected(false);
     };
-  }, [active, mapId, removeRemotePlayer, replaceRemotePlayers, updateRemotePlayer]);
+  }, [active, characterId, mapId, removeRemotePlayer, replaceRemotePlayers, updateRemotePlayer]);
 
   const sendMessage = useCallback(async (body: string) => {
     const socket = socketRef.current;
@@ -317,11 +368,26 @@ export function useRealtimeGameRoom({
     );
   }, []);
 
+  const sendCombatAttack = useCallback(async (attack: RealtimeCombatAttack) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("Realtime room is not connected.");
+    }
+    socket.send(
+      JSON.stringify({
+        type: "combat:attack",
+        payload: attack,
+      }),
+    );
+  }, []);
+
   return {
     connected,
     remotePlayers,
+    worldSnapshot,
     messages,
     selfDisplayName,
     sendMessage,
+    sendCombatAttack,
   };
 }

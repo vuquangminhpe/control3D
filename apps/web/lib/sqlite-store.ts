@@ -296,6 +296,13 @@ export type MapCharacterInput = {
   sortOrder?: number;
 };
 
+export type UserCharacterRecord = {
+  userId: string;
+  characterId: string;
+  purchasedAt: string;
+  source: "purchase" | "free" | "admin";
+};
+
 export type GameCharacterRecord = {
   id: string;
   name: string;
@@ -543,6 +550,28 @@ function initializeDb(database: DatabaseSync) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS point_transactions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      map_id TEXT,
+      session_id TEXT,
+      type TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS user_characters (
+      user_id TEXT NOT NULL,
+      character_id TEXT NOT NULL,
+      purchased_at TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'purchase',
+      PRIMARY KEY (user_id, character_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY,
       map_id TEXT NOT NULL,
@@ -575,6 +604,9 @@ function initializeDb(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
     CREATE INDEX IF NOT EXISTS auth_sessions_family_idx ON auth_sessions(refresh_token_family);
     CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS point_transactions_user_idx ON point_transactions(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS point_transactions_map_idx ON point_transactions(map_id, created_at);
+    CREATE INDEX IF NOT EXISTS user_characters_user_idx ON user_characters(user_id, purchased_at);
     CREATE INDEX IF NOT EXISTS chat_messages_map_created_idx ON chat_messages(map_id, created_at);
     CREATE INDEX IF NOT EXISTS chat_messages_user_created_idx ON chat_messages(user_id, created_at);
     CREATE INDEX IF NOT EXISTS game_characters_model_idx ON game_characters(model_id);
@@ -1357,6 +1389,31 @@ export async function createAdmin(input: {
   return record;
 }
 
+export async function upsertAdminCredentials(input: {
+  email: string;
+  passwordHash: string;
+  role?: AdminRole;
+  permissions?: string[];
+}) {
+  const existing = await getAdminByEmail(input.email);
+  if (!existing) {
+    return createAdmin(input);
+  }
+
+  const now = new Date().toISOString();
+  const role = input.role ?? existing.role;
+  const permissions = input.permissions ?? existing.permissions;
+  db.prepare(
+    `
+    UPDATE admins
+    SET password_hash = ?, role = ?, permissions_json = ?, is_active = 1, updated_at = ?
+    WHERE id = ?
+  `,
+  ).run(input.passwordHash, role, JSON.stringify(permissions), now, existing.id);
+
+  return getAdminById(existing.id);
+}
+
 export async function getAdminByEmail(email: string) {
   const row = db.prepare("SELECT * FROM admins WHERE email = ?").get(email.trim().toLowerCase()) as
     | Record<string, unknown>
@@ -1507,6 +1564,248 @@ export async function markUserLogin(id: string) {
     new Date().toISOString(),
     id,
   );
+}
+
+export async function awardUserPoints(input: {
+  id?: string;
+  userId: string;
+  mapId?: string | null;
+  sessionId?: string | null;
+  type: "monster_kill" | "admin_adjustment" | "refund";
+  amount: number;
+  metadata?: Record<string, unknown> | null;
+}) {
+  const amount = Math.max(0, Math.trunc(Number(input.amount) || 0));
+  if (amount <= 0) {
+    throw new Error("Point amount must be positive");
+  }
+
+  const transactionId = input.id || randomUUID();
+  const existing = db
+    .prepare("SELECT * FROM point_transactions WHERE id = ?")
+    .get(transactionId) as Record<string, unknown> | undefined;
+  if (existing) {
+    return {
+      transactionId,
+      balanceAfter: Number(existing.balance_after),
+      amount: Number(existing.amount),
+      duplicate: true,
+    };
+  }
+
+  const user = await getUserById(input.userId);
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const now = new Date().toISOString();
+  let result!: { balanceAfter: number; lifetimeAfter: number };
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare(
+      `
+      INSERT INTO user_points (user_id, balance, lifetime, updated_at)
+      VALUES (?, 0, 0, ?)
+      ON CONFLICT(user_id) DO NOTHING
+    `,
+    ).run(input.userId, now);
+
+    const points = db
+      .prepare("SELECT balance, lifetime FROM user_points WHERE user_id = ?")
+      .get(input.userId) as { balance: number; lifetime: number };
+    const balanceAfter = Number(points.balance) + amount;
+    const lifetimeAfter = Number(points.lifetime) + amount;
+
+    db.prepare(
+      "UPDATE user_points SET balance = ?, lifetime = ?, updated_at = ? WHERE user_id = ?",
+    ).run(balanceAfter, lifetimeAfter, now, input.userId);
+
+    db.prepare(
+      `
+      INSERT INTO point_transactions (
+        id, user_id, map_id, session_id, type, amount, balance_after, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(
+      transactionId,
+      input.userId,
+      input.mapId ?? null,
+      input.sessionId ?? null,
+      input.type,
+      amount,
+      balanceAfter,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      now,
+    );
+
+    result = { balanceAfter, lifetimeAfter };
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback errors so the original failure is preserved.
+    }
+    throw error;
+  }
+
+  return {
+    transactionId,
+    balanceAfter: result.balanceAfter,
+    lifetimeAfter: result.lifetimeAfter,
+    amount,
+    duplicate: false,
+  };
+}
+
+export async function getUserPointSummary(userId: string) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    INSERT INTO user_points (user_id, balance, lifetime, updated_at)
+    VALUES (?, 0, 0, ?)
+    ON CONFLICT(user_id) DO NOTHING
+  `,
+  ).run(userId, now);
+  const row = db
+    .prepare("SELECT balance, lifetime, updated_at FROM user_points WHERE user_id = ?")
+    .get(userId) as { balance: number; lifetime: number; updated_at: string } | undefined;
+  return {
+    balance: Number(row?.balance ?? 0),
+    lifetime: Number(row?.lifetime ?? 0),
+    updatedAt: row?.updated_at ?? now,
+  };
+}
+
+export async function userOwnsCharacter(userId: string, characterId: string) {
+  const row = db
+    .prepare("SELECT 1 FROM user_characters WHERE user_id = ? AND character_id = ?")
+    .get(userId, characterId);
+  return Boolean(row);
+}
+
+export async function listUserCharacters(userId: string) {
+  const rows = db
+    .prepare("SELECT * FROM user_characters WHERE user_id = ? ORDER BY purchased_at DESC")
+    .all(userId) as Array<Record<string, unknown>>;
+  return rows.map((row): UserCharacterRecord => ({
+    userId: String(row.user_id),
+    characterId: String(row.character_id),
+    purchasedAt: String(row.purchased_at),
+    source:
+      row.source === "free" || row.source === "admin" || row.source === "purchase"
+        ? row.source
+        : "purchase",
+  }));
+}
+
+export async function grantUserCharacter(
+  userId: string,
+  characterId: string,
+  source: UserCharacterRecord["source"] = "free",
+) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    INSERT INTO user_characters (user_id, character_id, purchased_at, source)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, character_id) DO NOTHING
+  `,
+  ).run(userId, characterId, now, source);
+  return listUserCharacters(userId);
+}
+
+export async function purchaseUserCharacter(input: {
+  userId: string;
+  mapId: string;
+  character: Pick<MapCharacterRecord, "characterId" | "pointPrice" | "name">;
+}) {
+  const price = Math.max(0, Math.trunc(Number(input.character.pointPrice) || 0));
+  if (await userOwnsCharacter(input.userId, input.character.characterId)) {
+    return {
+      purchased: false,
+      alreadyOwned: true,
+      balanceAfter: (await getUserPointSummary(input.userId)).balance,
+      characters: await listUserCharacters(input.userId),
+    };
+  }
+  if (price <= 0) {
+    const characters = await grantUserCharacter(input.userId, input.character.characterId, "free");
+    return {
+      purchased: true,
+      alreadyOwned: false,
+      balanceAfter: (await getUserPointSummary(input.userId)).balance,
+      characters,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const transactionId = `character:${input.userId}:${input.mapId}:${input.character.characterId}`;
+  let balanceAfter = 0;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare(
+      `
+      INSERT INTO user_points (user_id, balance, lifetime, updated_at)
+      VALUES (?, 0, 0, ?)
+      ON CONFLICT(user_id) DO NOTHING
+    `,
+    ).run(input.userId, now);
+
+    const points = db
+      .prepare("SELECT balance FROM user_points WHERE user_id = ?")
+      .get(input.userId) as { balance: number } | undefined;
+    const balance = Number(points?.balance ?? 0);
+    if (balance < price) {
+      throw new Error("Not enough points");
+    }
+
+    balanceAfter = balance - price;
+    db.prepare("UPDATE user_points SET balance = ?, updated_at = ? WHERE user_id = ?").run(
+      balanceAfter,
+      now,
+      input.userId,
+    );
+    db.prepare(
+      `
+      INSERT INTO user_characters (user_id, character_id, purchased_at, source)
+      VALUES (?, ?, ?, 'purchase')
+    `,
+    ).run(input.userId, input.character.characterId, now);
+    db.prepare(
+      `
+      INSERT INTO point_transactions (
+        id, user_id, map_id, session_id, type, amount, balance_after, metadata_json, created_at
+      ) VALUES (?, ?, ?, NULL, 'character_purchase', ?, ?, ?, ?)
+    `,
+    ).run(
+      transactionId,
+      input.userId,
+      input.mapId,
+      -price,
+      balanceAfter,
+      JSON.stringify({
+        characterId: input.character.characterId,
+        characterName: input.character.name,
+      }),
+      now,
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the original error.
+    }
+    throw error;
+  }
+
+  return {
+    purchased: true,
+    alreadyOwned: false,
+    balanceAfter,
+    characters: await listUserCharacters(input.userId),
+  };
 }
 
 export async function createAuthSession(input: {
