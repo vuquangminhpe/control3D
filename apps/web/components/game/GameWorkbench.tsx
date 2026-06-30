@@ -4491,8 +4491,18 @@ function AssetManagerPanel() {
   );
 }
 
-export function GameWorkbench() {
-  const [activeTab, setActiveTab] = useState<WorkbenchTab>("maps");
+type GameWorkbenchProps = {
+  adminPreview?: boolean;
+  initialMapId?: string | null;
+};
+
+export function GameWorkbench({
+  adminPreview = false,
+  initialMapId = null,
+}: GameWorkbenchProps = {}) {
+  const [activeTab, setActiveTab] = useState<WorkbenchTab>(() =>
+    adminPreview || initialMapId ? "play" : "maps",
+  );
   log3DDebug(
     "game-workbench-render",
     "GameWorkbench render",
@@ -4566,9 +4576,11 @@ export function GameWorkbench() {
 
   const realtimeRoom = useRealtimeGameRoom({
     active: realtimeWebSocketEnabled && activeTab === "play",
+    spectator: adminPreview,
     mapId: activeLevel?.id,
     playerPosition,
     playerVelocity,
+    characterId: activeLevel?.playerCharacter?.modelId ?? null,
     characterName: activeLevel?.playerCharacter?.name ?? null,
     characterFileUrl: activeLevel?.playerCharacter?.fileUrl ?? null,
     actionState: playerActionState,
@@ -4706,7 +4718,7 @@ export function GameWorkbench() {
 
     const params = new URLSearchParams(window.location.search);
     const tab = parseWorkbenchTab(params.get("tab"));
-    const mapId = params.get("map");
+    const mapId = initialMapId ?? params.get("map");
 
     if (mapId) {
       const routeLevel = savedLevels.find((level) => level.id === mapId);
@@ -4717,11 +4729,13 @@ export function GameWorkbench() {
       }
     }
 
-    if (tab) {
+    if (initialMapId) {
+      setActiveTab("play");
+    } else if (tab) {
       setActiveTab(tab);
     }
     initialRouteAppliedRef.current = true;
-  }, [savedLevels, setActiveLevel]);
+  }, [initialMapId, savedLevels, setActiveLevel]);
 
   useEffect(() => {
     let cancelled = false;

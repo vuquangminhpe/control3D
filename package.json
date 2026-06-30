@@ -12,6 +12,8 @@
     "build": "yarn workspace web build",
     "lint": "yarn workspace web lint",
     "typecheck": "yarn workspace web typecheck",
-    "typecheck:realtime": "yarn workspace realtime typecheck"
+    "typecheck:realtime": "yarn workspace realtime typecheck",
+    "seed:admin": "yarn workspace web seed:admin",
+    "db:init": "node -e \"console.log('SQLite initializes automatically on first app request')\""
   }
 }

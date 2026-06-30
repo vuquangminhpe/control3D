@@ -20,16 +20,12 @@ const nextConfig: NextConfig = {
     return {
       beforeFiles: [
         {
-          source: "/api/:path*",
-          destination: `${javaApiBaseUrl}/api/:path*`,
+          source: "/api/v1/:path*",
+          destination: `${javaApiBaseUrl}/api/v1/:path*`,
         },
         {
           source: "/upload-files/:path*",
           destination: `${javaApiBaseUrl}/upload-files/:path*`,
-        },
-        {
-          source: "/uploads/:path*",
-          destination: `${javaApiBaseUrl}/uploads/:path*`,
         },
       ],
     };
