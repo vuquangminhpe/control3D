@@ -9,6 +9,8 @@ import {
   useState,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type WheelEvent as ReactWheelEvent,
   type SetStateAction,
 } from "react";
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
@@ -49,8 +51,7 @@ import {
   type WeaponType,
 } from "@/store/gameStore";
 
-type WorkbenchTab = "play" | "maps" | "editor" | "story";
-type ViewerRole = "guest" | "user" | "admin";
+type WorkbenchTab = "play" | "maps" | "editor" | "objects" | "story";
 type PlacementTool = "player" | "object" | "enemy_low" | "enemy_fantasy" | "npc";
 type EditableLevelDraft = ReturnType<typeof buildEditableLevel>;
 type AssetLibraryItem = {
@@ -76,25 +77,17 @@ type CharacterActionLink = {
   durationMs?: number | null;
 };
 
-type PlayableCharacterOption = {
-  id: string;
-  characterId: string;
-  modelId: string;
-  name: string;
-  fileUrl: string;
-  format?: string | null;
-  isDefault: boolean;
-  pointPrice: number;
-  owned: boolean;
-  locked: boolean;
-  canUse: boolean;
-};
-
 const DEFAULT_MAP_URL = "";
 const PLAYER_SPAWN_OFFSET = 1.5;
 const EDITOR_MAP_MAX_SIZE = 92;
 const MAP_CHARACTER_HEIGHT = 1.85;
 const MAP_OBJECT_MAX_SIZE = 1.8;
+const ROUTABLE_WORKBENCH_TABS: readonly WorkbenchTab[] = [
+  "play",
+  "maps",
+  "editor",
+  "objects",
+];
 const weaponActionPoses: WeaponActionPose[] = [
   "default",
   "idle",
@@ -133,6 +126,15 @@ const DEFAULT_MAP_RELATIVE_SCALE: MapRelativeScale = {
 
 function formatVector(position: [number, number, number]) {
   return position.map((value) => Number(value.toFixed(2))).join(", ");
+}
+
+function parseWorkbenchTab(value: string | null): WorkbenchTab | null {
+  if (value === "npc" || value === "character" || value === "lobby") {
+    return "objects";
+  }
+  return ROUTABLE_WORKBENCH_TABS.includes(value as WorkbenchTab)
+    ? (value as WorkbenchTab)
+    : null;
 }
 
 function parseVector(value: string): [number, number, number] | null {
@@ -270,130 +272,6 @@ function getCharacterActionsFromAsset(asset: AssetLibraryItem | null | undefined
   ));
 }
 
-function getDefaultPlayableMapCharacter(level: GameLevel | null | undefined) {
-  const playable = (level?.mapCharacters ?? [])
-    .filter((entry) => entry.role === "playable")
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-  return playable.find((entry) => entry.isDefault) ?? playable[0] ?? null;
-}
-
-function CharacterSelectPanel({
-  balance,
-  characters,
-  error,
-  onBuy,
-  onSelect,
-  selectedCharacterId,
-}: {
-  balance: number | null;
-  characters: PlayableCharacterOption[];
-  error: string | null;
-  onBuy: (character: PlayableCharacterOption) => void;
-  onSelect: (characterId: string) => void;
-  selectedCharacterId: string | null;
-}) {
-  if (!characters.length) return null;
-
-  return (
-    <aside className="character-select-panel">
-      <header>
-        <span>Character</span>
-        <strong>{balance === null ? "Points --" : `${balance} pts`}</strong>
-      </header>
-      <div className="character-select-list">
-        {characters.map((character) => {
-          const selected = selectedCharacterId === character.characterId;
-          return (
-            <button
-              className={`character-select-item${selected ? " active" : ""}${character.locked ? " locked" : ""}`}
-              key={character.characterId}
-              onClick={() => onSelect(character.characterId)}
-              type="button"
-            >
-              <span>
-                <strong>{character.name}</strong>
-                <small>
-                  {character.isDefault
-                    ? "Default"
-                    : character.pointPrice > 0
-                      ? `${character.pointPrice} pts`
-                      : "Free"}
-                </small>
-              </span>
-              {character.canUse ? <em>Use</em> : <em>Locked</em>}
-            </button>
-          );
-        })}
-      </div>
-      {characters.find((entry) => entry.characterId === selectedCharacterId)?.locked ? (
-        <button
-          className="character-buy-button"
-          onClick={() => {
-            const selected = characters.find((entry) => entry.characterId === selectedCharacterId);
-            if (selected) onBuy(selected);
-          }}
-          type="button"
-        >
-          Buy character
-        </button>
-      ) : null}
-      {error ? <p className="character-select-error">{error}</p> : null}
-    </aside>
-  );
-}
-
-function SpectatorPlayerPanel({
-  connected,
-  focusPlayerId,
-  onFocusPlayer,
-  players,
-}: {
-  connected: boolean;
-  focusPlayerId: string | null;
-  onFocusPlayer: (playerId: string | null) => void;
-  players: RemotePresencePlayer[];
-}) {
-  return (
-    <aside className="spectator-player-panel">
-      <header>
-        <span>Observer</span>
-        <strong>{connected ? `${players.length} online` : "connecting"}</strong>
-      </header>
-      <button
-        className={!focusPlayerId ? "active" : ""}
-        onClick={() => onFocusPlayer(null)}
-        type="button"
-      >
-        <span>
-          <strong>Overview</strong>
-          <small>Whole map camera</small>
-        </span>
-        <em>View</em>
-      </button>
-      <div className="spectator-player-list">
-        {players.length ? (
-          players.map((player) => (
-            <button
-              className={focusPlayerId === player.id ? "active" : ""}
-              key={player.id}
-              onClick={() => onFocusPlayer(player.id)}
-              type="button"
-            >
-              <span>
-                <strong>{player.displayName}</strong>
-                <small>{player.characterName ?? "No character name"}</small>
-              </span>
-              <em>{player.actionState || "idle"}</em>
-            </button>
-          ))
-        ) : (
-          <p>No active players in this room.</p>
-        )}
-      </div>
-    </aside>
-  );
-}
-
 function writeCharacterActionsToCustomProps(
   customProps: AssetLibraryItem["customProps"],
   actions: CharacterActionLink[],
@@ -482,6 +360,89 @@ function createPlacedObjectId() {
     return `obj-${crypto.randomUUID()}`;
   }
   return `obj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function isMapAsset(asset: AssetLibraryItem) {
+  const category = asset.category?.toLowerCase();
+  const fileUrl = asset.fileUrl.toLowerCase();
+  return (
+    category === "map" ||
+    category === "environment" ||
+    category === "architecture" ||
+    asset.customProps?.isMap === true ||
+    fileUrl.includes("/maps/") ||
+    fileUrl.includes("/map/") ||
+    fileUrl.includes("/environment/") ||
+    fileUrl.includes("/architecture/")
+  );
+}
+
+function createMapLayer(asset: AssetLibraryItem, index: number): PlacedObject {
+  return {
+    id: createPlacedObjectId(),
+    modelId: asset.id,
+    name: asset.name,
+    fileUrl: asset.fileUrl,
+    position: [index * 10, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    isMap: true,
+  };
+}
+
+function createDefaultPlayerCharacterFromAssets(assetLibrary: AssetLibraryItem[]): LevelCharacter {
+  const characterAsset = assetLibrary.find((asset) => {
+    const category = asset.category?.toLowerCase();
+    const fileUrl = asset.fileUrl.toLowerCase();
+    return (
+      category === "character" ||
+      category === "characters" ||
+      category === "npc" ||
+      fileUrl.includes("robot") ||
+      fileUrl.includes("character")
+    );
+  });
+
+  return {
+    modelId: characterAsset?.id ?? "default-layer-player",
+    name: characterAsset?.name ?? "Layer Player",
+    fileUrl: characterAsset?.fileUrl ?? "/models/robot_tuan_tra_NPC.glb",
+    format: characterAsset?.format ?? "glb",
+  };
+}
+
+type SetupObjectKind = "NPC" | "Lobby" | "Character";
+
+function getSetupObjectKind(object: PlacedObject): SetupObjectKind | null {
+  if (object.isMap) return null;
+  const match = object.name.match(/^\[(NPC|Lobby|Character)\]/);
+  return match ? (match[1] as SetupObjectKind) : null;
+}
+
+function stripSetupObjectPrefix(name: string) {
+  return name.replace(/^\[(NPC|Lobby|Character)\]\s*/, "");
+}
+
+function createSetupObject(kind: SetupObjectKind, name: string): PlacedObject {
+  return {
+    id: createPlacedObjectId(),
+    modelId: `${kind.toLowerCase()}-object`,
+    name: `[${kind}] ${name.trim() || kind}`,
+    fileUrl: "/models/robot_tuan_tra_NPC.glb",
+    position: [2, 0, 2],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+  };
+}
+
+function vectorStep(
+  value: [number, number, number],
+  axis: 0 | 1 | 2,
+  amount: number,
+): [number, number, number] {
+  const next: [number, number, number] = [...value];
+  next[axis] = Number((next[axis] + amount).toFixed(2));
+  return next;
 }
 
 function normalizePlacedObjects(objects: PlacedObject[]) {
@@ -2236,6 +2197,1408 @@ function MapsPanel({
   );
 }
 
+function ModalShell({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        display: "grid",
+        placeItems: "center",
+        background: "rgba(0,0,0,0.62)",
+      }}
+    >
+      <section
+        className="workbench-panel"
+        style={{
+          position: "relative",
+          inset: "auto",
+          width: "min(560px, calc(100vw - 32px))",
+          maxHeight: "88vh",
+          overflow: "auto",
+        }}
+      >
+        <div className="workbench-panel-header">
+          <div>
+            <span>SETUP</span>
+            <h2>{title}</h2>
+          </div>
+          <div className="level-actions">
+            <button type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function NumberStepper({
+  label,
+  value,
+  onChange,
+  step = 1,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  step?: number;
+}) {
+  return (
+    <label style={{ display: "grid", gap: 6 }}>
+      {label}
+      <div style={{ display: "grid", gridTemplateColumns: "36px 1fr 36px", gap: 6 }}>
+        <button type="button" onClick={() => onChange(Number((value - step).toFixed(2)))}>
+          -
+        </button>
+        <input
+          value={value}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isFinite(next)) onChange(next);
+          }}
+        />
+        <button type="button" onClick={() => onChange(Number((value + step).toFixed(2)))}>
+          +
+        </button>
+      </div>
+    </label>
+  );
+}
+
+function AxisLabel({ children, position }: { children: string; position: [number, number, number] }) {
+  return (
+    <Html center distanceFactor={18} position={position}>
+      <span className="map-axis-label">{children}</span>
+    </Html>
+  );
+}
+
+function MapLayerWorkspaceViewer({
+  layers,
+  selectedLayerId,
+  objects = [],
+  selectedObjectId = null,
+}: {
+  layers: PlacedObject[];
+  selectedLayerId: string | null;
+  objects?: PlacedObject[];
+  selectedObjectId?: string | null;
+}) {
+  return (
+    <div className="map-game-viewport">
+      <Canvas camera={{ position: [24, 18, 24], fov: 48 }} dpr={[1, 1.5]}>
+        <color attach="background" args={["#070b16"]} />
+        <ambientLight intensity={0.9} />
+        <directionalLight intensity={1.8} position={[12, 18, 8]} />
+        <Grid
+          args={[120, 120]}
+          cellColor="#203047"
+          cellSize={2}
+          sectionColor="#00ffc4"
+          sectionSize={10}
+          fadeDistance={120}
+          fadeStrength={1}
+          followCamera={false}
+          infiniteGrid
+          position={[0, -0.02, 0]}
+        />
+        <axesHelper args={[18]} />
+        <AxisLabel position={[19, 0, 0]}>X</AxisLabel>
+        <AxisLabel position={[0, 19, 0]}>Y</AxisLabel>
+        <AxisLabel position={[0, 0, 19]}>Z</AxisLabel>
+        {layers.map((layer) => {
+          const selected = layer.id === selectedLayerId;
+          return (
+            <group
+              key={layer.id}
+              position={layer.position}
+              rotation={[
+                (layer.rotation[0] * Math.PI) / 180,
+                (layer.rotation[1] * Math.PI) / 180,
+                (layer.rotation[2] * Math.PI) / 180,
+              ]}
+              scale={layer.scale}
+            >
+              <Suspense fallback={null}>
+                <ModelLoader
+                  debugLabel={`map-game-layer:${layer.name}`}
+                  fitMaxSize={42}
+                  groundToY={0}
+                  markAsTerrain
+                  src={layer.fileUrl}
+                />
+              </Suspense>
+              {selected ? (
+                <Html center distanceFactor={18} position={[0, 2.4, 0]}>
+                  <span className="builder-marker-label">Selected</span>
+                </Html>
+              ) : null}
+            </group>
+          );
+        })}
+        {objects.map((object) => {
+          const selected = object.id === selectedObjectId;
+          return (
+            <group
+              key={object.id}
+              position={object.position}
+              rotation={[
+                (object.rotation[0] * Math.PI) / 180,
+                (object.rotation[1] * Math.PI) / 180,
+                (object.rotation[2] * Math.PI) / 180,
+              ]}
+              scale={object.scale}
+            >
+              <Suspense fallback={null}>
+                <ModelLoader
+                  debugLabel={`map-game-object:${object.name}`}
+                  fitMaxSize={2.4}
+                  groundToY={0}
+                  src={object.fileUrl}
+                />
+              </Suspense>
+              <Html center distanceFactor={18} position={[0, selected ? 3.1 : 2.5, 0]}>
+                <span className={selected ? "builder-marker-label" : "map-object-label"}>
+                  {stripSetupObjectPrefix(object.name)}
+                </span>
+              </Html>
+            </group>
+          );
+        })}
+        <OrbitControls makeDefault />
+      </Canvas>
+    </div>
+  );
+}
+
+function MapEditorAssetsPanel({
+  assetLibrary,
+  refreshAssets,
+}: {
+  assetLibrary: AssetLibraryItem[];
+  refreshAssets: () => Promise<void>;
+}) {
+  const [uploadName, setUploadName] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const mapAssets = useMemo(() => assetLibrary.filter(isMapAsset), [assetLibrary]);
+
+  const uploadMap = async (file?: File) => {
+    if (!file) return;
+    setIsUploading(true);
+    setMessage(null);
+    const cleanName = uploadName.trim() || file.name.replace(/\.[^.]+$/, "");
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("name", cleanName);
+    formData.set("category", "map");
+    formData.set("license", "proprietary");
+    formData.append("tags", "map");
+    formData.append("tags", "game-map-asset");
+
+    try {
+      const response = await fetch("/api/models/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        setMessage(payload?.error ?? "Upload map failed.");
+        return;
+      }
+      setUploadName("");
+      await refreshAssets();
+      setMessage(`Uploaded "${payload.data?.name ?? cleanName}".`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const deleteMap = async (assetId: string) => {
+    await fetch(`/api/models/${encodeURIComponent(assetId)}`, { method: "DELETE" }).catch(() => undefined);
+    await refreshAssets();
+  };
+
+  return (
+    <section className="workbench-panel" style={{ width: "min(760px, calc(100vw - 32px))", margin: "72px auto 0" }}>
+      <div className="workbench-panel-header">
+        <div>
+          <span>MAP EDITOR</span>
+          <h2>Uploaded Maps</h2>
+          <p>Upload and delete raw map files. Map Game creation is handled in the Map Game tab.</p>
+        </div>
+      </div>
+      <div className="editor-glass-grid">
+        <label style={{ gridColumn: "span 2" }}>
+          Map name
+          <input value={uploadName} onChange={(event) => setUploadName(event.target.value)} />
+        </label>
+        <label className="map-upload-field" style={{ gridColumn: "span 2" }}>
+          Upload map
+          <input
+            accept=".glb,.gltf,.fbx"
+            disabled={isUploading}
+            onChange={(event) => {
+              void uploadMap(event.target.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+            type="file"
+          />
+        </label>
+      </div>
+      {message ? <p className="builder-empty-note">{message}</p> : null}
+      <div className="level-grid" style={{ marginTop: 16 }}>
+        {!mapAssets.length ? (
+          <article className="level-card">
+            <h3>Empty</h3>
+            <p>No uploaded maps yet.</p>
+          </article>
+        ) : null}
+        {mapAssets.map((asset) => (
+          <article className="level-card" key={asset.id}>
+            <h3>{asset.name}</h3>
+            <p>{asset.fileUrl}</p>
+            <div className="level-actions">
+              <button className="danger" type="button" onClick={() => void deleteMap(asset.id)}>
+                Delete
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MapGamePanel({
+  assetLibrary,
+  draft,
+  setDraft,
+  saveCustomLevel,
+  saveLevel,
+}: {
+  assetLibrary: AssetLibraryItem[];
+  draft: EditableLevelDraft | null;
+  setDraft: Dispatch<SetStateAction<EditableLevelDraft | null>>;
+  saveCustomLevel: (level: Omit<GameLevel, "id" | "createdAt" | "updatedAt"> & { id?: string }) => Promise<GameLevel | null>;
+  saveLevel: () => Promise<GameLevel | null>;
+}) {
+  const savedLevels = useGameStore((state) => state.savedLevels);
+  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const deleteCustomLevel = useGameStore((state) => state.deleteCustomLevel);
+  const [showCreate, setShowCreate] = useState(false);
+  const [mapGameName, setMapGameName] = useState("New Map Game");
+  const [mapRows, setMapRows] = useState<string[]>([""]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [activeAxis, setActiveAxis] = useState<0 | 1 | 2>(0);
+  const [showAddMap, setShowAddMap] = useState(false);
+  const [selectedAddMapId, setSelectedAddMapId] = useState("");
+  const mapAssets = useMemo(() => assetLibrary.filter(isMapAsset), [assetLibrary]);
+  const mapLayers = draft?.placedObjects.filter((object) => object.isMap) ?? [];
+  const selectedLayer = mapLayers.find((layer) => layer.id === selectedLayerId) ?? mapLayers[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedLayerId && mapLayers[0]) setSelectedLayerId(mapLayers[0].id);
+  }, [mapLayers, selectedLayerId]);
+
+  const createMapGame = async () => {
+    const selectedAssets = mapRows
+      .map((id) => mapAssets.find((asset) => asset.id === id))
+      .filter((asset): asset is AssetLibraryItem => Boolean(asset));
+    if (!selectedAssets.length) return;
+
+    const saved = await saveCustomLevel({
+      name: mapGameName.trim() || "New Map Game",
+      mapModelUrl: selectedAssets[0].fileUrl,
+      playerCharacter: createDefaultPlayerCharacterFromAssets(assetLibrary),
+      playerSpawn: [0, PLAYER_SPAWN_OFFSET, 0],
+      robotSpawn: [4, 0, 4],
+      robotStory: "",
+      storyGraph: EMPTY_STORY_GRAPH,
+      mapCharacters: [],
+      placedObjects: selectedAssets.map(createMapLayer),
+      zombieSpawns: [],
+    });
+    if (saved) {
+      setActiveLevel(saved.id);
+      setDraft(buildEditableLevel(saved));
+      setSelectedLayerId(saved.placedObjects.find((object) => object.isMap)?.id ?? null);
+      setShowCreate(false);
+      setMapRows([""]);
+      setMapGameName("New Map Game");
+    }
+  };
+
+  const addMapLayerToGame = () => {
+    const asset = mapAssets.find((entry) => entry.id === selectedAddMapId);
+    if (!asset || !draft?.id) return;
+    const nextLayer = createMapLayer(asset, mapLayers.length);
+    nextLayer.position = [mapLayers.length * 10, 0, mapLayers.length * 6];
+
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: [...current.placedObjects, nextLayer],
+          }
+        : current,
+    );
+    setSelectedLayerId(nextLayer.id);
+    setSelectedAddMapId("");
+    setShowAddMap(false);
+  };
+
+  const updateLayer = (layerId: string, updates: Partial<PlacedObject>) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: current.placedObjects.map((object) =>
+              object.id === layerId ? { ...object, ...updates } : object,
+            ),
+          }
+        : current,
+    );
+  };
+
+  const moveSelectedLayer = useCallback(
+    (amount: number) => {
+      if (!selectedLayer) return;
+      updateLayer(selectedLayer.id, {
+        position: vectorStep(selectedLayer.position, activeAxis, amount),
+      });
+    },
+    [activeAxis, selectedLayer],
+  );
+
+  const scaleSelectedLayer = useCallback(
+    (amount: number) => {
+      if (!selectedLayer) return;
+      const nextScale = Math.max(0.1, Number((selectedLayer.scale[0] + amount).toFixed(2)));
+      updateLayer(selectedLayer.id, { scale: [nextScale, nextScale, nextScale] });
+    },
+    [selectedLayer],
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!selectedLayer) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "SELECT") return;
+      if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+        event.preventDefault();
+        moveSelectedLayer(event.shiftKey ? 5 : 1);
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+        event.preventDefault();
+        moveSelectedLayer(event.shiftKey ? -5 : -1);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [moveSelectedLayer, selectedLayer]);
+
+  const handleWorkspaceWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.shiftKey || !selectedLayer) return;
+    event.preventDefault();
+    scaleSelectedLayer(event.deltaY < 0 ? 0.1 : -0.1);
+  };
+
+  return (
+    <section className="workbench-panel map-game-workspace-panel">
+      <div className="workbench-panel-header">
+        <div>
+          <span>MAP GAME</span>
+          <h2>Map Game Manager</h2>
+          <p>Create Map Games from uploaded maps, then edit each map layer position and scale.</p>
+        </div>
+        <div className="level-actions">
+          <button type="button" onClick={() => setShowCreate(true)}>
+            Create Map Game
+          </button>
+          {draft?.id ? (
+            <button type="button" onClick={() => void saveLevel()}>
+              Save
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="level-grid">
+        {!savedLevels.length ? (
+          <article className="level-card">
+            <h3>Empty</h3>
+            <p>No Map Game has been created yet.</p>
+          </article>
+        ) : null}
+        {savedLevels.map((level) => (
+          <article
+            className={`level-card${draft?.id === level.id ? " active" : ""}`}
+            key={level.id}
+            onClick={() => {
+              setActiveLevel(level.id);
+              setDraft(buildEditableLevel(level));
+              setSelectedLayerId(level.placedObjects.find((object) => object.isMap)?.id ?? null);
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <h3>{level.name}</h3>
+            <p>{level.placedObjects.filter((object) => object.isMap).length} map layer(s)</p>
+            <div className="level-actions">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActiveLevel(level.id);
+                  setDraft(buildEditableLevel(level));
+                }}
+              >
+                Edit
+              </button>
+              <button
+                className="danger"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void deleteCustomLevel(level.id);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {draft?.id ? (
+        <div className="map-game-editor-workspace" onWheel={handleWorkspaceWheel}>
+          <aside className="level-card map-game-layer-list">
+            <div className="map-game-layer-header">
+              <h3>Map layers</h3>
+              <button
+                disabled={!mapAssets.length}
+                onClick={() => {
+                  setSelectedAddMapId(mapAssets[0]?.id ?? "");
+                  setShowAddMap(true);
+                }}
+                type="button"
+              >
+                Add Map
+              </button>
+            </div>
+            {mapLayers.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {mapLayers.map((layer) => (
+                  <button
+                    className={selectedLayer?.id === layer.id ? "active" : ""}
+                    key={layer.id}
+                    onClick={() => setSelectedLayerId(layer.id)}
+                    type="button"
+                  >
+                    {layer.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p>Empty</p>
+            )}
+          </aside>
+          <article className="level-card map-game-canvas-card">
+            {selectedLayer ? (
+              <>
+                <MapLayerWorkspaceViewer layers={mapLayers} selectedLayerId={selectedLayer.id} />
+                <div className="map-coordinate-readout">
+                  <span>X {selectedLayer.position[0].toFixed(2)}</span>
+                  <span>Y {selectedLayer.position[1].toFixed(2)}</span>
+                  <span>Z {selectedLayer.position[2].toFixed(2)}</span>
+                  <span>Scale {selectedLayer.scale[0].toFixed(2)}</span>
+                </div>
+              </>
+            ) : (
+              <p>Select a map layer.</p>
+            )}
+          </article>
+          <aside className="level-card map-game-transform-panel">
+            {selectedLayer ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <h3>{selectedLayer.name}</h3>
+                  <div className="axis-button-row">
+                    {(["X", "Y", "Z"] as const).map((axis, index) => (
+                      <button
+                        className={activeAxis === index ? "active" : ""}
+                        key={axis}
+                        onClick={() => setActiveAxis(index as 0 | 1 | 2)}
+                        type="button"
+                      >
+                        {axis}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="builder-empty-note">
+                    Select an axis, then use arrow keys. Shift + arrow moves faster. Shift + mouse wheel changes scale.
+                  </p>
+                  <NumberStepper
+                    label="Scale"
+                    step={0.1}
+                    value={selectedLayer.scale[0]}
+                    onChange={(value) => updateLayer(selectedLayer.id, { scale: [value, value, value] })}
+                  />
+                  {(["X", "Y", "Z"] as const).map((axis, index) => (
+                    <NumberStepper
+                      key={axis}
+                      label={`Position ${axis}`}
+                      value={selectedLayer.position[index]}
+                      onChange={(value) => {
+                        const next: [number, number, number] = [...selectedLayer.position];
+                        next[index] = value;
+                        updateLayer(selectedLayer.id, { position: next });
+                      }}
+                    />
+                  ))}
+                </div>
+            ) : (
+              <p>No layer selected.</p>
+            )}
+          </aside>
+        </div>
+      ) : null}
+
+      {showCreate ? (
+        <ModalShell title="Create Map Game" onClose={() => setShowCreate(false)}>
+          <div className="editor-glass-grid">
+            <label style={{ gridColumn: "span 2" }}>
+              Map Game name
+              <input value={mapGameName} onChange={(event) => setMapGameName(event.target.value)} />
+            </label>
+            <div style={{ gridColumn: "span 2", display: "grid", gap: 8 }}>
+              <strong>Maps</strong>
+              {mapRows.map((mapId, index) => (
+                <select
+                  key={index}
+                  value={mapId}
+                  onChange={(event) =>
+                    setMapRows((current) =>
+                      current.map((entry, entryIndex) => (entryIndex === index ? event.target.value : entry)),
+                    )
+                  }
+                >
+                  <option value="">Select uploaded map...</option>
+                  {mapAssets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.name}
+                    </option>
+                  ))}
+                </select>
+              ))}
+              <button type="button" onClick={() => setMapRows((current) => [...current, ""])}>
+                +
+              </button>
+            </div>
+            <div className="level-actions" style={{ gridColumn: "span 2" }}>
+              <button disabled={!mapRows.some(Boolean)} type="button" onClick={() => void createMapGame()}>
+                OK
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+
+      {showAddMap ? (
+        <ModalShell title="Add Map to Map Game" onClose={() => setShowAddMap(false)}>
+          <div className="editor-glass-grid">
+            <label style={{ gridColumn: "span 2" }}>
+              Uploaded map
+              <select
+                value={selectedAddMapId}
+                onChange={(event) => setSelectedAddMapId(event.target.value)}
+              >
+                <option value="">Select uploaded map...</option>
+                {mapAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!mapAssets.length ? (
+              <p className="builder-empty-note" style={{ gridColumn: "span 2" }}>
+                Upload a map in Map Editor before adding it to a Map Game.
+              </p>
+            ) : null}
+            <div className="level-actions" style={{ gridColumn: "span 2" }}>
+              <button disabled={!selectedAddMapId} type="button" onClick={addMapLayerToGame}>
+                OK
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+    </section>
+  );
+}
+
+function ObjectManagerPanel({
+  draft,
+  setDraft,
+  saveLevel,
+}: {
+  draft: EditableLevelDraft | null;
+  setDraft: Dispatch<SetStateAction<EditableLevelDraft | null>>;
+  saveLevel: () => Promise<GameLevel | null>;
+}) {
+  const savedLevels = useGameStore((state) => state.savedLevels);
+  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const [showAdd, setShowAdd] = useState(false);
+  const [objectName, setObjectName] = useState("");
+  const [objectKind, setObjectKind] = useState<SetupObjectKind>("NPC");
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [activeAxis, setActiveAxis] = useState<0 | 1 | 2>(0);
+  const mapLayers = draft?.placedObjects.filter((object) => object.isMap) ?? [];
+  const objects = draft?.placedObjects.filter((object) => getSetupObjectKind(object)) ?? [];
+  const selectedObject = objects.find((object) => object.id === selectedObjectId) ?? objects[0] ?? null;
+  const selectedKind = selectedObject ? getSetupObjectKind(selectedObject) ?? "NPC" : "NPC";
+
+  useEffect(() => {
+    if (!selectedObjectId && objects[0]) setSelectedObjectId(objects[0].id);
+    if (selectedObjectId && !objects.some((object) => object.id === selectedObjectId)) {
+      setSelectedObjectId(objects[0]?.id ?? null);
+    }
+  }, [objects, selectedObjectId]);
+
+  const updateObject = useCallback(
+    (objectId: string, updates: Partial<PlacedObject>) => {
+      setDraft((current) =>
+        current
+          ? {
+              ...current,
+              placedObjects: current.placedObjects.map((object) =>
+                object.id === objectId ? { ...object, ...updates } : object,
+              ),
+            }
+          : current,
+      );
+    },
+    [setDraft],
+  );
+
+  const addObject = () => {
+    const nextObject = createSetupObject(objectKind, objectName);
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: [...current.placedObjects, nextObject],
+          }
+        : current,
+    );
+    setSelectedObjectId(nextObject.id);
+    setObjectName("");
+    setObjectKind("NPC");
+    setShowAdd(false);
+  };
+
+  const deleteObject = (objectId: string) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: current.placedObjects.filter((object) => object.id !== objectId),
+          }
+        : current,
+    );
+    setSelectedObjectId(null);
+  };
+
+  const moveSelectedObject = useCallback(
+    (amount: number) => {
+      if (!selectedObject) return;
+      updateObject(selectedObject.id, {
+        position: vectorStep(selectedObject.position, activeAxis, amount),
+      });
+    },
+    [activeAxis, selectedObject, updateObject],
+  );
+
+  const scaleSelectedObject = useCallback(
+    (amount: number) => {
+      if (!selectedObject) return;
+      const nextScale = Math.max(0.1, Number((selectedObject.scale[0] + amount).toFixed(2)));
+      updateObject(selectedObject.id, { scale: [nextScale, nextScale, nextScale] });
+    },
+    [selectedObject, updateObject],
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!selectedObject) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "SELECT") return;
+      if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+        event.preventDefault();
+        moveSelectedObject(event.shiftKey ? 5 : 1);
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+        event.preventDefault();
+        moveSelectedObject(event.shiftKey ? -5 : -1);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [moveSelectedObject, selectedObject]);
+
+  const handleWorkspaceWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.shiftKey || !selectedObject) return;
+    event.preventDefault();
+    scaleSelectedObject(event.deltaY < 0 ? 0.1 : -0.1);
+  };
+
+  return (
+    <section className="workbench-panel map-game-workspace-panel">
+      <div className="workbench-panel-header">
+        <div>
+          <span>OBJECTS</span>
+          <h2>Object Manager</h2>
+          <p>Select a Map Game, then add or edit NPC, Character, and Lobby objects on the map.</p>
+        </div>
+        <div className="level-actions">
+          {draft?.id ? (
+            <>
+              <button type="button" onClick={() => setShowAdd(true)}>
+                Add Object
+              </button>
+              <button type="button" onClick={() => void saveLevel()}>
+                Save
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="map-game-editor-workspace object-editor-workspace" onWheel={handleWorkspaceWheel}>
+        <aside className="level-card map-game-layer-list">
+          <div className="object-list-section">
+            <h3>Map Games</h3>
+            {!savedLevels.length ? <p>Empty</p> : null}
+            <div style={{ display: "grid", gap: 8 }}>
+              {savedLevels.map((level) => (
+                <button
+                  className={draft?.id === level.id ? "active" : ""}
+                  key={level.id}
+                  onClick={() => {
+                    setActiveLevel(level.id);
+                    setDraft(buildEditableLevel(level));
+                    setSelectedObjectId(null);
+                  }}
+                  type="button"
+                >
+                  {level.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="object-list-section">
+            <h3>Objects</h3>
+            {!draft?.id ? <p>Select a Map Game.</p> : null}
+            {draft?.id && !objects.length ? <p>Empty</p> : null}
+            <div style={{ display: "grid", gap: 8 }}>
+              {objects.map((object) => (
+                <button
+                  className={selectedObject?.id === object.id ? "active" : ""}
+                  key={object.id}
+                  onClick={() => setSelectedObjectId(object.id)}
+                  type="button"
+                >
+                  {stripSetupObjectPrefix(object.name)}
+                  <small>{getSetupObjectKind(object)}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <article className="level-card map-game-canvas-card">
+          {draft?.id ? (
+            <>
+              <MapLayerWorkspaceViewer
+                layers={mapLayers}
+                selectedLayerId={null}
+                objects={objects}
+                selectedObjectId={selectedObject?.id ?? null}
+              />
+              <div className="map-coordinate-readout">
+                <span>Maps {mapLayers.length}</span>
+                <span>Objects {objects.length}</span>
+                {selectedObject ? (
+                  <>
+                    <span>X {selectedObject.position[0].toFixed(2)}</span>
+                    <span>Y {selectedObject.position[1].toFixed(2)}</span>
+                    <span>Z {selectedObject.position[2].toFixed(2)}</span>
+                    <span>Scale {selectedObject.scale[0].toFixed(2)}</span>
+                  </>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="empty-workspace-message">Select a Map Game to load its maps and objects.</div>
+          )}
+        </article>
+
+        <aside className="level-card map-game-transform-panel">
+          {selectedObject ? (
+            <div style={{ display: "grid", gap: 10 }}>
+              <h3>{stripSetupObjectPrefix(selectedObject.name)}</h3>
+              <label>
+                Name
+                <input
+                  value={stripSetupObjectPrefix(selectedObject.name)}
+                  onChange={(event) =>
+                    updateObject(selectedObject.id, {
+                      name: `[${selectedKind}] ${event.target.value}`,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Type
+                <select
+                  value={selectedKind}
+                  onChange={(event) => {
+                    const nextKind = event.target.value as SetupObjectKind;
+                    const cleanName = stripSetupObjectPrefix(selectedObject.name) || nextKind;
+                    updateObject(selectedObject.id, {
+                      modelId: `${nextKind.toLowerCase()}-object`,
+                      name: `[${nextKind}] ${cleanName}`,
+                    });
+                  }}
+                >
+                  <option value="NPC">NPC</option>
+                  <option value="Character">Character</option>
+                  <option value="Lobby">Lobby</option>
+                </select>
+              </label>
+              <div className="axis-button-row">
+                {(["X", "Y", "Z"] as const).map((axis, index) => (
+                  <button
+                    className={activeAxis === index ? "active" : ""}
+                    key={axis}
+                    onClick={() => setActiveAxis(index as 0 | 1 | 2)}
+                    type="button"
+                  >
+                    {axis}
+                  </button>
+                ))}
+              </div>
+              <p className="builder-empty-note">
+                Select an axis, then use arrow keys. Shift + arrow moves faster. Shift + mouse wheel changes scale.
+              </p>
+              <NumberStepper
+                label="Scale"
+                step={0.1}
+                value={selectedObject.scale[0]}
+                onChange={(value) => updateObject(selectedObject.id, { scale: [value, value, value] })}
+              />
+              {(["X", "Y", "Z"] as const).map((axis, index) => (
+                <NumberStepper
+                  key={axis}
+                  label={`Position ${axis}`}
+                  value={selectedObject.position[index]}
+                  onChange={(value) => {
+                    const next: [number, number, number] = [...selectedObject.position];
+                    next[index] = value;
+                    updateObject(selectedObject.id, { position: next });
+                  }}
+                />
+              ))}
+              <button className="danger" type="button" onClick={() => deleteObject(selectedObject.id)}>
+                Delete
+              </button>
+            </div>
+          ) : (
+            <p>{draft?.id ? "No object selected." : "Select a Map Game."}</p>
+          )}
+        </aside>
+      </div>
+
+      {showAdd ? (
+        <ModalShell title="Add Object" onClose={() => setShowAdd(false)}>
+          <div className="editor-glass-grid">
+            <label style={{ gridColumn: "span 2" }}>
+              Name
+              <input value={objectName} onChange={(event) => setObjectName(event.target.value)} />
+            </label>
+            <label style={{ gridColumn: "span 2" }}>
+              Type
+              <select value={objectKind} onChange={(event) => setObjectKind(event.target.value as SetupObjectKind)}>
+                <option value="NPC">NPC</option>
+                <option value="Character">Character</option>
+                <option value="Lobby">Lobby</option>
+              </select>
+            </label>
+            <div className="level-actions" style={{ gridColumn: "span 2" }}>
+              <button disabled={!draft?.id} type="button" onClick={addObject}>
+                OK
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+    </section>
+  );
+}
+
+function SetupObjectsPanel({
+  mode,
+  draft,
+  setDraft,
+  saveLevel,
+}: {
+  mode: SetupObjectKind;
+  draft: EditableLevelDraft | null;
+  setDraft: Dispatch<SetStateAction<EditableLevelDraft | null>>;
+  saveLevel: () => Promise<GameLevel | null>;
+}) {
+  const savedLevels = useGameStore((state) => state.savedLevels);
+  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const [showAdd, setShowAdd] = useState(false);
+  const [objectName, setObjectName] = useState("");
+  const [objectKind, setObjectKind] = useState<SetupObjectKind>(mode);
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const objects = draft?.placedObjects.filter((object) => getSetupObjectKind(object) === mode) ?? [];
+  const selectedObject = objects.find((object) => object.id === selectedObjectId) ?? objects[0] ?? null;
+
+  useEffect(() => {
+    setObjectKind(mode);
+    setSelectedObjectId(null);
+  }, [mode, draft?.id]);
+
+  const addObject = () => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: [...current.placedObjects, createSetupObject(objectKind, objectName)],
+          }
+        : current,
+    );
+    setObjectName("");
+    setShowAdd(false);
+  };
+
+  const updateObject = (objectId: string, updates: Partial<PlacedObject>) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: current.placedObjects.map((object) =>
+              object.id === objectId ? { ...object, ...updates } : object,
+            ),
+          }
+        : current,
+    );
+  };
+
+  const deleteObject = (objectId: string) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            placedObjects: current.placedObjects.filter((object) => object.id !== objectId),
+          }
+        : current,
+    );
+    setSelectedObjectId(null);
+  };
+
+  return (
+    <section className="workbench-panel" style={{ width: "min(1100px, calc(100vw - 32px))", margin: "72px auto 0" }}>
+      <div className="workbench-panel-header">
+        <div>
+          <span>{mode.toUpperCase()}</span>
+          <h2>{mode} Manager</h2>
+          <p>Select a Map Game, then add, edit, or delete {mode} objects.</p>
+        </div>
+        <div className="level-actions">
+          {draft?.id ? (
+            <>
+              <button type="button" onClick={() => setShowAdd(true)}>
+                Add
+              </button>
+              <button type="button" onClick={() => void saveLevel()}>
+                Save
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="level-grid">
+        {!savedLevels.length ? (
+          <article className="level-card">
+            <h3>Empty</h3>
+            <p>No Map Game has been created yet.</p>
+          </article>
+        ) : null}
+        {savedLevels.map((level) => (
+          <article
+            className={`level-card${draft?.id === level.id ? " active" : ""}`}
+            key={level.id}
+            onClick={() => {
+              setActiveLevel(level.id);
+              setDraft(buildEditableLevel(level));
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <h3>{level.name}</h3>
+            <p>{level.placedObjects.filter((object) => getSetupObjectKind(object) === mode).length} {mode} object(s)</p>
+          </article>
+        ))}
+      </div>
+
+      {draft?.id ? (
+        <div style={{ display: "grid", gridTemplateColumns: "280px minmax(0, 1fr)", gap: 16, marginTop: 16 }}>
+          <aside className="level-card">
+            <h3>{mode} list</h3>
+            {objects.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {objects.map((object) => (
+                  <button
+                    className={selectedObject?.id === object.id ? "active" : ""}
+                    key={object.id}
+                    onClick={() => setSelectedObjectId(object.id)}
+                    type="button"
+                  >
+                    {object.name.replace(/^\[(NPC|Lobby|Character)\]\s*/, "")}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p>Empty</p>
+            )}
+          </aside>
+          <article className="level-card">
+            {selectedObject ? (
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 320px", gap: 16 }}>
+                <div style={{ minHeight: 300 }}>
+                  <BuilderModelViewer src={selectedObject.fileUrl} fitHeight={2.6} />
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <label>
+                    Name
+                    <input
+                      value={selectedObject.name.replace(/^\[(NPC|Lobby|Character)\]\s*/, "")}
+                      onChange={(event) =>
+                        updateObject(selectedObject.id, {
+                          name: `[${mode}] ${event.target.value}`,
+                        })
+                      }
+                    />
+                  </label>
+                  <NumberStepper
+                    label="Scale"
+                    step={0.1}
+                    value={selectedObject.scale[0]}
+                    onChange={(value) => updateObject(selectedObject.id, { scale: [value, value, value] })}
+                  />
+                  {(["X", "Y", "Z"] as const).map((axis, index) => (
+                    <NumberStepper
+                      key={axis}
+                      label={`Position ${axis}`}
+                      value={selectedObject.position[index]}
+                      onChange={(value) => {
+                        const next: [number, number, number] = [...selectedObject.position];
+                        next[index] = value;
+                        updateObject(selectedObject.id, { position: next });
+                      }}
+                    />
+                  ))}
+                  <button className="danger" type="button" onClick={() => deleteObject(selectedObject.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p>Empty</p>
+            )}
+          </article>
+        </div>
+      ) : null}
+
+      {showAdd ? (
+        <ModalShell title={`Add ${mode}`} onClose={() => setShowAdd(false)}>
+          <div className="editor-glass-grid">
+            <label style={{ gridColumn: "span 2" }}>
+              Name
+              <input value={objectName} onChange={(event) => setObjectName(event.target.value)} />
+            </label>
+            <label style={{ gridColumn: "span 2" }}>
+              Type
+              <select value={objectKind} onChange={(event) => setObjectKind(event.target.value as SetupObjectKind)}>
+                <option value="NPC">NPC</option>
+                <option value="Lobby">Lobby</option>
+                <option value="Character">Character</option>
+              </select>
+            </label>
+            <div className="level-actions" style={{ gridColumn: "span 2" }}>
+              <button type="button" onClick={addObject}>
+                OK
+              </button>
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+    </section>
+  );
+}
+
+function PlayGameSelectorPanel({
+  onPlay,
+}: {
+  onPlay: (levelId: string) => void;
+}) {
+  const savedLevels = useGameStore((state) => state.savedLevels);
+
+  return (
+    <section className="workbench-panel" style={{ width: "min(920px, calc(100vw - 32px))", margin: "72px auto 0" }}>
+      <div className="workbench-panel-header">
+        <div>
+          <span>PLAY GAME</span>
+          <h2>Select Map Game</h2>
+          <p>Only Map Games created from uploaded maps are shown here.</p>
+        </div>
+      </div>
+      <div className="level-grid">
+        {!savedLevels.length ? (
+          <article className="level-card">
+            <h3>Empty</h3>
+            <p>Create a Map Game first.</p>
+          </article>
+        ) : null}
+        {savedLevels.map((level) => (
+          <article className="level-card" key={level.id}>
+            <h3>{level.name}</h3>
+            <p>{level.placedObjects.filter((object) => object.isMap).length} map layer(s)</p>
+            <div className="level-actions">
+              <button type="button" onClick={() => onPlay(level.id)}>
+                Play
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MapScopedSetupPanel({
+  mode,
+  draft,
+  setDraft,
+  assetLibrary,
+  saveLevel,
+  onCreateMap,
+  onPlay,
+}: {
+  mode: "npc" | "character" | "lobby";
+  draft: EditableLevelDraft | null;
+  setDraft: Dispatch<SetStateAction<EditableLevelDraft | null>>;
+  assetLibrary: AssetLibraryItem[];
+  saveLevel: () => Promise<GameLevel | null>;
+  onCreateMap: () => void;
+  onPlay: () => void;
+}) {
+  const activeLevel = useGameStore((state) => state.activeLevel);
+  const savedLevels = useGameStore((state) => state.savedLevels);
+  const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const selectedMapExists = activeLevel.id !== "empty-map" && savedLevels.some((level) => level.id === activeLevel.id);
+  const characterAssets = assetLibrary.filter((asset) => {
+    const category = asset.category?.toLowerCase();
+    const url = asset.fileUrl.toLowerCase();
+    return category === "character" || category === "characters" || category === "npc" || url.includes("robot");
+  });
+  const title =
+    mode === "npc" ? "NPC" : mode === "character" ? "Character" : "Lobby";
+
+  if (!selectedMapExists || !draft) {
+    return (
+      <section className="workbench-panel">
+        <div className="workbench-panel-header">
+          <div>
+            <span>{title.toUpperCase()}</span>
+            <h2>Select Map Game</h2>
+            <p>Select a saved Map Game before adding {title.toLowerCase()} settings.</p>
+          </div>
+          <div className="level-actions">
+            <button type="button" onClick={onCreateMap}>
+              Create Map Game
+            </button>
+          </div>
+        </div>
+        <div className="level-grid">
+          {!savedLevels.length ? (
+            <article className="level-card">
+              <h3>No Map Game yet</h3>
+              <p>Create a Map Game from uploaded map assets first.</p>
+              <div className="level-actions">
+                <button type="button" onClick={onCreateMap}>
+                  Create Map Game
+                </button>
+              </div>
+            </article>
+          ) : null}
+          {savedLevels.map((level) => (
+            <article className="level-card" key={level.id}>
+              <h3>{level.name}</h3>
+              <p>{level.mapModelUrl}</p>
+              <div className="level-meta">
+                <span>{level.placedObjects.length + 1} map layer(s)</span>
+                <span>{level.playerCharacter?.name ?? "No character"}</span>
+              </div>
+              <div className="level-actions">
+                <button type="button" onClick={() => setActiveLevel(level.id)}>
+                  Select
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  const saveAndPlay = async () => {
+    const saved = await saveLevel();
+    if (saved) setActiveLevel(saved.id);
+    onPlay();
+  };
+
+  return (
+    <section className="workbench-panel">
+      <div className="workbench-panel-header">
+        <div>
+          <span>{title.toUpperCase()}</span>
+          <h2>{activeLevel.name}</h2>
+          <p>Configure this Map Game. Player runtime history is not saved.</p>
+        </div>
+        <div className="level-actions">
+          <button type="button" onClick={() => void saveLevel()}>
+            Save Map Game
+          </button>
+          <button type="button" onClick={() => void saveAndPlay()}>
+            Play
+          </button>
+        </div>
+      </div>
+
+      {mode === "npc" ? (
+        <div className="editor-liquid-dock" style={{ position: "static" }}>
+          <details className="editor-glass-section" open>
+            <summary>NPC placement</summary>
+            <div className="editor-glass-grid">
+              <label style={{ gridColumn: "span 2" }}>
+                NPC position
+                <input
+                  value={draft.robotSpawn}
+                  onChange={(event) =>
+                    setDraft((current) =>
+                      current ? { ...current, robotSpawn: event.target.value } : current,
+                    )
+                  }
+                />
+              </label>
+              <div style={{ gridColumn: "span 2", display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((current) =>
+                      current ? { ...current, robotSpawn: formatVector([4, 0, 4]) } : current,
+                    )
+                  }
+                >
+                  Place near center
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((current) =>
+                      current ? { ...current, robotSpawn: formatVector([8, 0, 0]) } : current,
+                    )
+                  }
+                >
+                  Place east
+                </button>
+              </div>
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {mode === "character" ? (
+        <div className="editor-liquid-dock" style={{ position: "static" }}>
+          <details className="editor-glass-section" open>
+            <summary>Player character</summary>
+            <div className="builder-character-grid">
+              {characterAssets.map((asset) => (
+                <button
+                  className={draft.playerCharacter?.modelId === asset.id ? "active" : ""}
+                  key={asset.id}
+                  onClick={() =>
+                    setDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            playerCharacter: {
+                              modelId: asset.id,
+                              name: asset.name,
+                              fileUrl: asset.fileUrl,
+                              format: asset.format,
+                            },
+                          }
+                        : current,
+                    )
+                  }
+                  type="button"
+                >
+                  <BuilderAssetSummary asset={asset} selected={draft.playerCharacter?.modelId === asset.id} />
+                </button>
+              ))}
+              {!characterAssets.length ? (
+                <p className="builder-empty-note">No character assets found. Upload/register a character first.</p>
+              ) : null}
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {mode === "lobby" ? (
+        <div className="level-grid">
+          <article className="level-card active">
+            <h3>{activeLevel.name}</h3>
+            <p>This Map Game is available for lobby/play selection after saving.</p>
+            <div className="level-meta">
+              <span>{activeLevel.mapModelUrl}</span>
+              <span>{activeLevel.playerCharacter?.name ?? "No character"}</span>
+            </div>
+          </article>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function LevelEditorPanel({
   onPlay,
   draft,
@@ -2254,7 +3617,14 @@ function LevelEditorPanel({
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [isUploadingMap, setIsUploadingMap] = useState(false);
   const [mapUploadError, setMapUploadError] = useState<string | null>(null);
+  const [mapUploadName, setMapUploadName] = useState("");
+  const [mapGameName, setMapGameName] = useState(draft.name || "New Map Game");
+  const [primaryMapAssetId, setPrimaryMapAssetId] = useState("");
+  const [secondaryMapAssetIds, setSecondaryMapAssetIds] = useState<string[]>([]);
+  const [mapGameMessage, setMapGameMessage] = useState<string | null>(null);
+  const [isCreatingMapGame, setIsCreatingMapGame] = useState(false);
   const setActiveLevel = useGameStore((state) => state.setActiveLevel);
+  const saveCustomLevel = useGameStore((state) => state.saveCustomLevel);
 
   const [selectedCoreId, setSelectedCoreId] = useState<string>("");
   const [selectedObjectId, setSelectedObjectId] = useState<string>("");
@@ -2283,17 +3653,26 @@ function LevelEditorPanel({
   };
 
   const mapAssets = assetLibrary.filter((asset) => {
-    const format =
-      asset.format?.toLowerCase() ??
-      asset.fileUrl.split(".").pop()?.toLowerCase();
+    const category = asset.category?.toLowerCase();
+    const fileUrl = asset.fileUrl.toLowerCase();
     return (
-      asset.category === "environment" ||
-      asset.category === "architecture" ||
-      format === "glb" ||
-      format === "gltf" ||
-      format === "fbx"
+      category === "map" ||
+      category === "environment" ||
+      category === "architecture" ||
+      asset.customProps?.isMap === true ||
+      fileUrl.includes("/maps/") ||
+      fileUrl.includes("/map/") ||
+      fileUrl.includes("/environment/") ||
+      fileUrl.includes("/architecture/")
     );
   });
+
+  useEffect(() => {
+    if (primaryMapAssetId && mapAssets.some((asset) => asset.id === primaryMapAssetId)) {
+      return;
+    }
+    setPrimaryMapAssetId(mapAssets[0]?.id ?? "");
+  }, [mapAssets, primaryMapAssetId]);
 
   const refreshAssets = async () => {
     const response = await fetch("/api/models", { cache: "no-store" });
@@ -2310,11 +3689,15 @@ function LevelEditorPanel({
     if (!file) return;
     setIsUploadingMap(true);
     setMapUploadError(null);
+    setMapGameMessage(null);
+    const cleanName = mapUploadName.trim() || file.name.replace(/\.[^.]+$/, "");
     const formData = new FormData();
     formData.set("file", file);
-    formData.set("name", file.name.replace(/\.[^.]+$/, ""));
-    formData.set("category", "environment");
+    formData.set("name", cleanName);
+    formData.set("category", "map");
     formData.set("license", "proprietary");
+    formData.append("tags", "map");
+    formData.append("tags", "game-map-asset");
 
     try {
       const response = await fetch("/api/models/upload", {
@@ -2330,13 +3713,85 @@ function LevelEditorPanel({
         setMapUploadError(payload?.error ?? "Map upload failed");
         return;
       }
-      setDraft((current) => ({
-        ...current,
-        mapModelUrl: payload.data?.fileUrl ?? current.mapModelUrl,
-      }));
       await refreshAssets();
+      setPrimaryMapAssetId(payload.data.id);
+      setMapUploadName("");
+      setMapGameMessage(`Uploaded map "${payload.data.name}". You can now create a Map Game.`);
     } finally {
       setIsUploadingMap(false);
+    }
+  };
+
+  const createMapObject = (asset: AssetLibraryItem, index: number): PlacedObject => ({
+    id: createPlacedObjectId(),
+    modelId: asset.id,
+    name: asset.name,
+    fileUrl: asset.fileUrl,
+    position: [(index + 1) * 8, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    isMap: true,
+  });
+
+  const createDefaultPlayerCharacter = (): LevelCharacter => {
+    const characterAsset = assetLibrary.find((asset) => {
+      const category = asset.category?.toLowerCase();
+      const fileUrl = asset.fileUrl.toLowerCase();
+      return (
+        category === "character" ||
+        category === "characters" ||
+        category === "npc" ||
+        fileUrl.includes("robot") ||
+        fileUrl.includes("character")
+      );
+    });
+
+    return {
+      modelId: characterAsset?.id ?? "default-layer-player",
+      name: characterAsset?.name ?? "Layer Player",
+      fileUrl: characterAsset?.fileUrl ?? "/models/robot_tuan_tra_NPC.glb",
+      format: characterAsset?.format ?? "glb",
+    };
+  };
+
+  const createMapGame = async () => {
+    setMapUploadError(null);
+    setMapGameMessage(null);
+    const primaryAsset = mapAssets.find((asset) => asset.id === primaryMapAssetId);
+    if (!primaryAsset) {
+      setMapGameMessage("Upload and select at least 1 map before creating a Map Game.");
+      return;
+    }
+
+    setIsCreatingMapGame(true);
+    try {
+      const secondaryAssets = secondaryMapAssetIds
+        .map((id) => mapAssets.find((asset) => asset.id === id))
+        .filter((asset): asset is AssetLibraryItem => Boolean(asset));
+      const saved = await saveCustomLevel({
+        name: mapGameName.trim() || "New Map Game",
+        mapModelUrl: primaryAsset.fileUrl,
+        playerCharacter: createDefaultPlayerCharacter(),
+        playerSpawn: [0, PLAYER_SPAWN_OFFSET, 0],
+        robotSpawn: [4, 0, 4],
+        robotStory: "",
+        storyGraph: EMPTY_STORY_GRAPH,
+        mapCharacters: [],
+        placedObjects: secondaryAssets.map(createMapObject),
+        zombieSpawns: [],
+      });
+
+      if (!saved) {
+        setMapGameMessage("Could not create Map Game.");
+        return;
+      }
+
+      setActiveLevel(saved.id);
+      setDraft(buildEditableLevel(saved));
+      setSecondaryMapAssetIds([]);
+      setMapGameMessage(`Created Map Game "${saved.name}". Add NPC or characters in the editor.`);
+    } finally {
+      setIsCreatingMapGame(false);
     }
   };
 
@@ -2388,7 +3843,132 @@ function LevelEditorPanel({
 
       <div className="editor-liquid-dock">
         <details className="editor-glass-section" open>
-          <summary>Map</summary>
+          <summary>Create Map Game</summary>
+          <div className="editor-glass-grid">
+            <label style={{ gridColumn: "span 2" }}>
+              Upload map name
+              <input
+                placeholder="Example: Factory floor"
+                value={mapUploadName}
+                onChange={(event) => setMapUploadName(event.target.value)}
+              />
+            </label>
+            <label className="map-upload-field" style={{ gridColumn: "span 2" }}>
+              Upload map asset to Java BE
+              <input
+                accept=".glb,.gltf,.fbx"
+                disabled={isUploadingMap}
+                onChange={(event) => {
+                  void uploadMap(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+                type="file"
+              />
+            </label>
+            <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <strong>Uploaded maps</strong>
+              {mapAssets.length ? (
+                <div style={{ display: "grid", gap: "6px" }}>
+                  {mapAssets.map((asset) => (
+                    <div
+                      key={asset.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: "8px",
+                        padding: "8px 10px",
+                        borderRadius: "6px",
+                        background: "rgba(255,255,255,0.06)",
+                      }}
+                    >
+                      <span>{asset.name}</span>
+                      <small style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {asset.fileUrl}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="builder-empty-note">No uploaded maps yet. Upload at least 1 map asset first.</p>
+              )}
+            </div>
+            <label style={{ gridColumn: "span 2" }}>
+              Map Game name
+              <input
+                value={mapGameName}
+                onChange={(event) => setMapGameName(event.target.value)}
+              />
+            </label>
+            <label style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "4px" }}>
+              Primary uploaded map
+              <select
+                disabled={!mapAssets.length}
+                style={{ padding: "6px", width: "100%" }}
+                value={primaryMapAssetId}
+                onChange={(event) => {
+                  setPrimaryMapAssetId(event.target.value);
+                  setSecondaryMapAssetIds((current) =>
+                    current.filter((id) => id !== event.target.value),
+                  );
+                }}
+              >
+                {mapAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <strong>Secondary maps</strong>
+              {mapAssets
+                .filter((asset) => asset.id !== primaryMapAssetId)
+                .map((asset) => (
+                  <label key={asset.id} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <input
+                      checked={secondaryMapAssetIds.includes(asset.id)}
+                      onChange={(event) => {
+                        setSecondaryMapAssetIds((current) =>
+                          event.target.checked
+                            ? [...current, asset.id]
+                            : current.filter((id) => id !== asset.id),
+                        );
+                      }}
+                      type="checkbox"
+                    />
+                    {asset.name}
+                  </label>
+                ))}
+              {mapAssets.length <= 1 ? (
+                <p className="builder-empty-note">Secondary maps are optional. Upload more map assets to combine them.</p>
+              ) : null}
+            </div>
+            <div style={{ gridColumn: "span 2", display: "flex", gap: "8px" }}>
+              <button
+                disabled={!mapAssets.length || isCreatingMapGame}
+                onClick={() => void createMapGame()}
+                type="button"
+              >
+                {isCreatingMapGame ? "Creating..." : "Create Map Game"}
+              </button>
+              <button
+                disabled={!draft.mapModelUrl}
+                onClick={async () => {
+                  const saved = await saveLevel();
+                  if (saved) setActiveLevel(saved.id);
+                  onPlay();
+                }}
+                type="button"
+              >
+                Play current
+              </button>
+            </div>
+          </div>
+          {mapUploadError ? <p className="builder-empty-note">{mapUploadError}</p> : null}
+          {mapGameMessage ? <p className="builder-empty-note">{mapGameMessage}</p> : null}
+        </details>
+        <details className="editor-glass-section">
+          <summary>Advanced map placement</summary>
           <div className="editor-glass-grid">
             <label>
               Name
@@ -2911,18 +4491,8 @@ function AssetManagerPanel() {
   );
 }
 
-type GameWorkbenchProps = {
-  adminPreview?: boolean;
-  initialMapId?: string | null;
-};
-
-export function GameWorkbench({
-  adminPreview = false,
-  initialMapId = null,
-}: GameWorkbenchProps = {}) {
-  const [activeTab, setActiveTab] = useState<WorkbenchTab>(
-    adminPreview || initialMapId ? "play" : "maps",
-  );
+export function GameWorkbench() {
+  const [activeTab, setActiveTab] = useState<WorkbenchTab>("maps");
   log3DDebug(
     "game-workbench-render",
     "GameWorkbench render",
@@ -2947,45 +4517,14 @@ export function GameWorkbench({
   const [chatDisplayName, setChatDisplayName] = useState("Player");
   const [isChatConnected, setIsChatConnected] = useState(false);
   const [remotePlayers, setRemotePlayers] = useState<RemotePresencePlayer[]>([]);
-  const [viewerRole, setViewerRole] = useState<ViewerRole>("guest");
-  const [playableCharacters, setPlayableCharacters] = useState<PlayableCharacterOption[]>([]);
-  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
-  const [pointBalance, setPointBalance] = useState<number | null>(null);
-  const [characterSelectError, setCharacterSelectError] = useState<string | null>(null);
-  const [spectatorFocusPlayerId, setSpectatorFocusPlayerId] = useState<string | null>(null);
+  const [isGameRunning, setIsGameRunning] = useState(false);
+  const realtimeWebSocketEnabled =
+    process.env.NEXT_PUBLIC_CONTROL3D_REALTIME_ENABLED === "true";
   const allowRealtimeFallback =
     process.env.NODE_ENV !== "production" &&
     process.env.NEXT_PUBLIC_CONTROL3D_ALLOW_REALTIME_FALLBACK !== "false";
 
-  const realtimePlayerCharacter =
-    playableCharacters.find((entry) => entry.characterId === selectedCharacterId) ??
-    getDefaultPlayableMapCharacter(activeLevel);
-  const selectedPlayableCharacter = playableCharacters.find(
-    (entry) => entry.characterId === selectedCharacterId,
-  );
-  const selectedCharacterCanUse = selectedPlayableCharacter?.canUse ?? true;
-  const realtimeCharacterDisplayName =
-    realtimePlayerCharacter && "displayLabel" in realtimePlayerCharacter
-      ? realtimePlayerCharacter.displayLabel || realtimePlayerCharacter.name
-      : realtimePlayerCharacter?.name;
-  const realtimeCharacterName =
-    realtimeCharacterDisplayName ||
-    activeLevel?.playerCharacter?.name ||
-    null;
-  const realtimeCharacterFileUrl =
-    realtimePlayerCharacter?.fileUrl ?? activeLevel?.playerCharacter?.fileUrl ?? null;
-  const realtimeCharacterId =
-    realtimePlayerCharacter?.characterId ?? activeLevel?.playerCharacter?.modelId ?? null;
-
-  const selectedPlayerCharacter =
-    selectedPlayableCharacter?.canUse
-      ? ({
-          modelId: selectedPlayableCharacter.modelId,
-          name: selectedPlayableCharacter.name,
-          fileUrl: selectedPlayableCharacter.fileUrl,
-          format: selectedPlayableCharacter.format ?? undefined,
-        } satisfies LevelCharacter)
-      : draft?.playerCharacter;
+  const selectedPlayerCharacter = draft?.playerCharacter;
   const selectedPlayerAsset = selectedPlayerCharacter
     ? assetLibrary.find((asset) => asset.id === selectedPlayerCharacter.modelId)
     : null;
@@ -3011,132 +4550,31 @@ export function GameWorkbench({
     selectedPlayerActions,
   ]);
   const playerPositionRef = useRef(playerPosition);
+  const initialRouteAppliedRef = useRef(false);
+
+  const refreshAssets = useCallback(async () => {
+    const response = await fetch("/api/models", { cache: "no-store" });
+    const payload = await response.json().catch(() => null);
+    if (payload?.success && Array.isArray(payload.data)) {
+      setAssetLibrary(payload.data);
+    }
+  }, []);
 
   useEffect(() => {
     playerPositionRef.current = playerPosition;
   }, [playerPosition]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPlayableCharacters() {
-      if (!activeLevel?.id || activeLevel.id === "empty-map") {
-        setPlayableCharacters([]);
-        setSelectedCharacterId(null);
-        setPointBalance(null);
-        return;
-      }
-
-      const fallbackCharacters = (activeLevel.mapCharacters ?? [])
-        .filter((entry) => entry.role === "playable")
-        .sort((a, b) => a.sortOrder - b.sortOrder)
-        .map((entry): PlayableCharacterOption => ({
-          id: entry.id,
-          characterId: entry.characterId,
-          modelId: entry.modelId,
-          name: entry.displayLabel || entry.name,
-          fileUrl: entry.fileUrl,
-          format: entry.format,
-          isDefault: entry.isDefault,
-          pointPrice: entry.pointPrice,
-          owned: entry.isDefault || entry.pointPrice <= 0,
-          locked: false,
-          canUse: true,
-        }));
-
-      try {
-        const response = await fetch(
-          `/api/maps/${encodeURIComponent(activeLevel.id)}/characters`,
-          { cache: "no-store" },
-        );
-        const payload = await response.json().catch(() => null);
-        const rows = response.ok && payload?.success && Array.isArray(payload.data)
-          ? payload.data as PlayableCharacterOption[]
-          : fallbackCharacters;
-        if (!cancelled) {
-          const normalized = rows.length ? rows : fallbackCharacters;
-          setPlayableCharacters(normalized);
-          const nextSelected =
-            normalized.find((entry) => entry.canUse && entry.isDefault) ??
-            normalized.find((entry) => entry.canUse) ??
-            normalized[0] ??
-            null;
-          setSelectedCharacterId((current) =>
-            current && normalized.some((entry) => entry.characterId === current)
-              ? current
-              : nextSelected?.characterId ?? null,
-          );
-        }
-      } catch {
-        if (!cancelled) {
-          setPlayableCharacters(fallbackCharacters);
-          setSelectedCharacterId(
-            fallbackCharacters.find((entry) => entry.isDefault)?.characterId ??
-              fallbackCharacters[0]?.characterId ??
-              null,
-          );
-        }
-      }
-
-      try {
-        const response = await fetch("/api/users/me/points", { cache: "no-store" });
-        const payload = await response.json().catch(() => null);
-        if (!cancelled && response.ok && payload?.success) {
-          setPointBalance(Number(payload.data?.balance ?? 0));
-        }
-      } catch {
-        if (!cancelled) setPointBalance(null);
-      }
-    }
-
-    void loadPlayableCharacters();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLevel]);
-
   const realtimeRoom = useRealtimeGameRoom({
-    active: activeTab === "play" && (adminPreview || selectedCharacterCanUse),
-    spectator: adminPreview,
+    active: realtimeWebSocketEnabled && activeTab === "play",
     mapId: activeLevel?.id,
     playerPosition,
     playerVelocity,
-    characterId: realtimeCharacterId,
-    characterName: realtimeCharacterName,
-    characterFileUrl: realtimeCharacterFileUrl,
+    characterName: activeLevel?.playerCharacter?.name ?? null,
+    characterFileUrl: activeLevel?.playerCharacter?.fileUrl ?? null,
     actionState: playerActionState,
     activeActionName: realtimeFallbackAction?.name ?? playerActionState,
     activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
   });
-
-  const buySelectedCharacter = useCallback(
-    async (character: PlayableCharacterOption) => {
-      if (!activeLevel?.id || activeLevel.id === "empty-map") return;
-      setCharacterSelectError(null);
-      try {
-        const response = await fetch(
-          `/api/maps/${encodeURIComponent(activeLevel.id)}/characters/${encodeURIComponent(character.characterId)}/buy`,
-          { method: "POST" },
-        );
-        const payload = await response.json().catch(() => null);
-        if (!response.ok || !payload?.success) {
-          throw new Error(payload?.error ?? "Unable to buy character");
-        }
-        setPointBalance(Number(payload.data?.balanceAfter ?? pointBalance ?? 0));
-        setPlayableCharacters((current) =>
-          current.map((entry) =>
-            entry.characterId === character.characterId
-              ? { ...entry, owned: true, locked: false, canUse: true }
-              : entry,
-          ),
-        );
-        setSelectedCharacterId(character.characterId);
-      } catch (error) {
-        setCharacterSelectError(error instanceof Error ? error.message : "Unable to buy character");
-      }
-    },
-    [activeLevel?.id, pointBalance],
-  );
 
   const setActiveGameplayAction = useGameStore((state) => state.setActiveGameplayAction);
 
@@ -3264,12 +4702,26 @@ export function GameWorkbench({
   }, [loadSavedLevels, loadWeaponLoadouts]);
 
   useEffect(() => {
-    if (!initialMapId) return;
-    const selected = savedLevels.find((level) => level.id === initialMapId);
-    if (!selected || activeLevel?.id === selected.id) return;
-    setActiveLevel(selected.id);
-    setActiveTab("play");
-  }, [activeLevel?.id, initialMapId, savedLevels, setActiveLevel]);
+    if (initialRouteAppliedRef.current || typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const tab = parseWorkbenchTab(params.get("tab"));
+    const mapId = params.get("map");
+
+    if (mapId) {
+      const routeLevel = savedLevels.find((level) => level.id === mapId);
+      if (!routeLevel) {
+        if (!savedLevels.length) return;
+      } else {
+        setActiveLevel(routeLevel.id);
+      }
+    }
+
+    if (tab) {
+      setActiveTab(tab);
+    }
+    initialRouteAppliedRef.current = true;
+  }, [savedLevels, setActiveLevel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3291,7 +4743,6 @@ export function GameWorkbench({
           if (!cancelled && nextName) {
             setChatDisplayName(String(nextName));
             setIsChatConnected(true);
-            setViewerRole(admin ? "admin" : "user");
           }
           return;
         } catch {
@@ -3301,7 +4752,6 @@ export function GameWorkbench({
 
       if (!cancelled) {
         setIsChatConnected(false);
-        setViewerRole("guest");
       }
     }
 
@@ -3310,14 +4760,6 @@ export function GameWorkbench({
       cancelled = true;
     };
   }, []);
-
-  const isAdminViewer = viewerRole === "admin";
-
-  useEffect(() => {
-    if (!isAdminViewer && activeTab !== "play") {
-      setActiveTab("play");
-    }
-  }, [activeTab, isAdminViewer]);
 
   const loadChatMessages = useCallback(async (mapId: string) => {
     const response = await fetch(
@@ -3334,7 +4776,6 @@ export function GameWorkbench({
   useEffect(() => {
     if (
       !allowRealtimeFallback ||
-      adminPreview ||
       realtimeRoom.connected ||
       activeTab !== "play" ||
       !activeLevel?.id ||
@@ -3366,7 +4807,6 @@ export function GameWorkbench({
   }, [
     activeLevel?.id,
     activeTab,
-    adminPreview,
     allowRealtimeFallback,
     loadChatMessages,
     realtimeRoom.connected,
@@ -3415,8 +4855,8 @@ export function GameWorkbench({
     const heartbeatBody = () => ({
       position: playerPositionRef.current,
       velocity: playerVelocity,
-      characterName: realtimeCharacterName,
-      characterFileUrl: realtimeCharacterFileUrl,
+      characterName: activeLevel.playerCharacter?.name ?? null,
+      characterFileUrl: activeLevel.playerCharacter?.fileUrl ?? null,
       actionState: playerActionState,
       activeActionName: realtimeFallbackAction?.name ?? playerActionState,
       activeActionUrl: realtimeFallbackAction?.fileUrl ?? null,
@@ -3452,12 +4892,12 @@ export function GameWorkbench({
     };
   }, [
     activeLevel?.id,
+    activeLevel?.playerCharacter?.fileUrl,
+    activeLevel?.playerCharacter?.name,
     activeTab,
     allowRealtimeFallback,
     playerActionState,
     playerVelocity,
-    realtimeCharacterFileUrl,
-    realtimeCharacterName,
     realtimeFallbackAction?.fileUrl,
     realtimeFallbackAction?.name,
     realtimeRoom.connected,
@@ -3473,9 +4913,6 @@ export function GameWorkbench({
     : allowRealtimeFallback
       ? remotePlayers
       : [];
-  const effectiveWorldSnapshot = realtimeRoom.connected
-    ? realtimeRoom.worldSnapshot
-    : null;
   const effectiveChatConnected =
     realtimeRoom.connected || (allowRealtimeFallback && isChatConnected);
   const effectiveChatDisplayName = realtimeRoom.connected
@@ -3488,15 +4925,6 @@ export function GameWorkbench({
       : sendRealtimeRequiredMessage;
 
   useEffect(() => {
-    if (
-      spectatorFocusPlayerId &&
-      !effectiveRemotePlayers.some((player) => player.id === spectatorFocusPlayerId)
-    ) {
-      setSpectatorFocusPlayerId(null);
-    }
-  }, [effectiveRemotePlayers, spectatorFocusPlayerId]);
-
-  useEffect(() => {
     if (activeLevel) {
       setDraft(buildEditableLevel(activeLevel));
     } else {
@@ -3506,20 +4934,13 @@ export function GameWorkbench({
 
   useEffect(() => {
     let cancelled = false;
-    const loadAssets = () =>
-      fetch("/api/models", { cache: "no-store" })
-        .then((response) => response.json())
-        .then((payload) => {
-          if (!cancelled && payload?.success && Array.isArray(payload.data)) {
-            setAssetLibrary(payload.data);
-          }
-        })
-        .catch(() => undefined);
-    void loadAssets();
+    refreshAssets().catch(() => {
+      if (!cancelled) setAssetLibrary([]);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshAssets]);
 
   const saveLevel = async () => {
     if (!draft) return null;
@@ -3549,55 +4970,41 @@ export function GameWorkbench({
 
   const openPlay = () => {
     requestGameFullscreen();
+    setIsGameRunning(true);
     setActiveTab("play");
   };
 
   const openEditor = () => {
-    requestGameFullscreen();
+    setIsGameRunning(false);
     setActiveTab("editor");
   };
 
   const createNewMap = async () => {
-    const saved = await saveCustomLevel({
-      name: "New Map",
-      mapModelUrl: DEFAULT_MAP_URL,
-      playerCharacter: null,
-      playerSpawn: [0, PLAYER_SPAWN_OFFSET, 0],
-      robotSpawn: [0, 0, 0],
-      robotStory: "",
-      storyGraph: EMPTY_STORY_GRAPH,
-      mapCharacters: [],
-      placedObjects: [],
-      zombieSpawns: [],
-    });
-    if (saved) {
-      setActiveLevel(saved.id);
-      openEditor();
-    }
+    setDraft(buildEditableLevel());
+    setActiveTab("editor");
   };
 
-  const showStoryTab = isAdminViewer && !!draft;
-  const workbenchTabs: Array<[WorkbenchTab, string]> = isAdminViewer
-    ? [
-        ["play", "Play Game"],
-        ["maps", "All Games"],
-        ["editor", "Map Editor"],
-        ...(showStoryTab ? [["story", "Story Graph"] as [WorkbenchTab, string]] : []),
-      ]
-    : [["play", "Play Game"]];
+  const showStoryTab = false;
 
   return (
     <div
-      className={`game-container${activeTab === "play" ? " game-container-play" : ""}${activeTab === "editor" ? " game-container-editor" : ""}${activeTab === "story" ? " game-container-story" : ""}`}
+      className={`game-container${activeTab === "play" && isGameRunning ? " game-container-play" : ""}${activeTab === "story" ? " game-container-story" : ""}`}
     >
       <nav className="game-workbench-nav">
-        {workbenchTabs.map(([id, label]) => (
+        {[
+          ["play", "Play Game"],
+          ["maps", "Map Game"],
+          ["editor", "Map Editor"],
+          ["objects", "Objects"],
+          ...(showStoryTab ? [["story", "Story Graph"]] : []),
+        ].map(([id, label]) => (
           <button
             className={activeTab === id ? "active" : ""}
             key={id}
             onClick={() => {
+              setIsGameRunning(false);
               if (id === "play") {
-                openPlay();
+                setActiveTab("play");
                 return;
               }
               if (id === "editor") {
@@ -3613,82 +5020,46 @@ export function GameWorkbench({
         ))}
       </nav>
 
-      {activeTab === "play" && (
+      {activeTab === "play" && isGameRunning && (
         <div style={{ position: "relative", width: "100%", height: "calc(100vh - 50px)" }}>
           <GameCanvas
             playerActions={selectedPlayerActions}
             remotePlayers={effectiveRemotePlayers}
-            worldSnapshot={effectiveWorldSnapshot}
-            showRuntimeStats={isAdminViewer || adminPreview}
-            spectatorFocusPlayerId={spectatorFocusPlayerId}
-            spectatorMode={adminPreview}
-            onCombatAttack={
-              realtimeRoom.connected && !adminPreview ? realtimeRoom.sendCombatAttack : undefined
-            }
           />
-          {adminPreview ? (
-            <aside className="admin-preview-ribbon">
-              <span>Admin preview</span>
-              <strong>{activeLevel?.name ?? "Map"}</strong>
-              <small>Spectator camera for live user gameplay on this map.</small>
-            </aside>
-          ) : null}
-          {adminPreview ? (
-            <SpectatorPlayerPanel
-              connected={realtimeRoom.connected}
-              focusPlayerId={spectatorFocusPlayerId}
-              onFocusPlayer={setSpectatorFocusPlayerId}
-              players={effectiveRemotePlayers}
-            />
-          ) : (
-            <>
-              <HUD />
-              <DialogueSystem />
-              <CharacterSelectPanel
-                balance={pointBalance}
-                characters={playableCharacters}
-                error={characterSelectError}
-                onBuy={buySelectedCharacter}
-                onSelect={setSelectedCharacterId}
-                selectedCharacterId={selectedCharacterId}
-              />
-            </>
-          )}
-          {isAdminViewer && !adminPreview ? (
-            <ManualActionConfigPanel
-              actions={selectedPlayerActions}
-              activeActionId={activeGameplayActionId}
-              onTriggerAction={triggerGameplayAction}
-            />
-          ) : null}
-          <GameChatPanel
-            connected={effectiveChatConnected}
-            displayName={effectiveChatDisplayName}
-            messages={effectiveChatMessages}
-            onSendMessage={effectiveSendChatMessage}
-            storageKey={`control3d:game-chat-panel:${activeLevel?.id ?? "local"}`}
-          />
+          <HUD />
         </div>
       )}
-      {isAdminViewer && activeTab === "maps" && (
-        <MapsPanel
-          onNewMap={() => {
-            void createNewMap();
+      {activeTab === "play" && !isGameRunning && (
+        <PlayGameSelectorPanel
+          onPlay={(levelId) => {
+            setActiveLevel(levelId);
+            openPlay();
           }}
-          onPlay={openPlay}
         />
       )}
-      {isAdminViewer && activeTab === "editor" && draft && (
-        <LevelEditorPanel
-          onPlay={openPlay}
-          draft={draft}
-          setDraft={setDraft as any}
+      {activeTab === "maps" && (
+        <MapGamePanel
           assetLibrary={assetLibrary}
-          setAssetLibrary={setAssetLibrary}
+          draft={draft}
+          setDraft={setDraft}
+          saveCustomLevel={saveCustomLevel}
           saveLevel={saveLevel}
         />
       )}
-      {isAdminViewer && activeTab === "story" && draft && (
+      {activeTab === "editor" && (
+        <MapEditorAssetsPanel
+          assetLibrary={assetLibrary}
+          refreshAssets={refreshAssets}
+        />
+      )}
+      {activeTab === "objects" && (
+        <ObjectManagerPanel
+          draft={draft}
+          setDraft={setDraft}
+          saveLevel={saveLevel}
+        />
+      )}
+      {activeTab === "story" && draft && (
         <div style={{ height: "calc(100vh - 50px)" }}>
           <StoryGraphPanel
             assetLibrary={assetLibrary}

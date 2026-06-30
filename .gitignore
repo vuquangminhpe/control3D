@@ -11,6 +11,7 @@ logs/
 .env.*
 !.env.example
 **/apps/web/data
+apps/web/.local-data/
 apps/web/public/uploads/*
 !apps/web/public/uploads/.gitkeep
 !apps/web/public/uploads/models/.gitkeep

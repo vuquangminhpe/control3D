@@ -814,6 +814,22 @@ export function Player({
 
     const body = rigidBodyRef.current;
     const playerPos = body.translation();
+    if (playerPos.y < -5) {
+      const spawn = useGameStore.getState().activeLevel.playerSpawn;
+      const safeSpawn = {
+        x: spawn[0],
+        y: Math.max(spawn[1], 1.5 * mapScaleRatio),
+        z: spawn[2],
+      };
+      body.setTranslation(safeSpawn, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      groundedContactsRef.current = 0;
+      jumpActiveRef.current = false;
+      lastSyncedPositionRef.current = [safeSpawn.x, safeSpawn.y, safeSpawn.z];
+      updatePlayerPosition(lastSyncedPositionRef.current);
+      updatePlayerVelocity([0, 0, 0]);
+      return;
+    }
     const playerVec3 = playerPositionVecRef.current.set(playerPos.x, playerPos.y, playerPos.z);
     const currentVel = body.linvel();
     const isGrounded = groundedContactsRef.current > 0 && currentVel.y <= 0.2;

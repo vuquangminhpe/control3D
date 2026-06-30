@@ -3,12 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 8878",
+    "dev": "next dev --turbo --port 3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit",
-    "seed:admin": "node scripts/seed-admin.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

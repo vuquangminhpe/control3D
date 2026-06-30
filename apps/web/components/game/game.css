@@ -232,6 +232,149 @@
   pointer-events: auto;
 }
 
+.game-container > .workbench-panel {
+  position: relative;
+  inset: auto;
+  width: min(1100px, calc(100vw - 32px));
+  max-height: none;
+  margin: 86px auto 24px;
+  overflow: visible;
+}
+
+.game-container > .workbench-panel[style] {
+  position: relative !important;
+  inset: auto !important;
+}
+
+.game-container > .map-game-workspace-panel {
+  width: calc(100vw - 32px);
+  min-height: calc(100dvh - 108px);
+  margin: 72px 16px 16px;
+}
+
+.map-game-editor-workspace {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 320px;
+  gap: 14px;
+  min-height: calc(100dvh - 348px);
+  margin-top: 16px;
+}
+
+.map-game-layer-list,
+.map-game-transform-panel,
+.map-game-canvas-card {
+  min-height: 0;
+}
+
+.map-game-layer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.map-game-layer-header h3 {
+  margin: 0;
+}
+
+.map-game-layer-header button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.map-game-layer-list button,
+.axis-button-row button {
+  min-height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.map-game-layer-list button.active,
+.axis-button-row button.active {
+  border-color: rgba(0, 255, 196, 0.5);
+  background: rgba(0, 255, 196, 0.14);
+  color: #00ffc4;
+}
+
+.map-game-canvas-card {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+
+.map-game-viewport {
+  width: 100%;
+  min-height: calc(100dvh - 382px);
+  height: 100%;
+  background: #070b16;
+}
+
+.map-coordinate-readout {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  z-index: 2;
+}
+
+.map-coordinate-readout span,
+.map-axis-label,
+.map-object-label {
+  border: 1px solid rgba(0, 255, 196, 0.24);
+  border-radius: 999px;
+  background: rgba(5, 8, 18, 0.78);
+  color: #dffdf4;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.object-editor-workspace {
+  min-height: calc(100dvh - 154px);
+}
+
+.object-list-section {
+  display: grid;
+  gap: 10px;
+}
+
+.object-list-section + .object-list-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.map-game-layer-list button small {
+  display: block;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.empty-workspace-message {
+  display: grid;
+  min-height: inherit;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.axis-button-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .game-container-play .workbench-panel {
   inset: 88px 24px 24px 24px;
 }
@@ -302,6 +445,7 @@
   color: rgba(255, 255, 255, 0.68);
   font-size: 13px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .level-meta {
@@ -320,6 +464,7 @@
 
 .level-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
 }
@@ -2754,6 +2899,29 @@
 
 .editor-glass-grid label.wide {
   grid-column: 1 / -1;
+}
+
+.game-container > .workbench-panel .editor-glass-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0;
+}
+
+.game-container > .workbench-panel .editor-glass-grid input,
+.game-container > .workbench-panel .editor-glass-grid select,
+.game-container > .workbench-panel .level-card input,
+.game-container > .workbench-panel .level-card select {
+  min-height: 38px;
+  width: 100%;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.08);
+  color: #fff;
+  padding: 0 10px;
+}
+
+.game-container > .workbench-panel .editor-glass-grid option,
+.game-container > .workbench-panel .level-card option {
+  color: #111827;
 }
 
 .editor-glass-section textarea {
