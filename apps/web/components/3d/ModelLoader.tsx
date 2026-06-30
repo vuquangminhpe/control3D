@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { useLoader, useThree, type ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import { OBJLoader, PLYLoader, STLLoader } from "three-stdlib";
@@ -24,6 +24,11 @@ type ModelLoaderProps = {
   src: string;
   wireframe?: boolean;
   ignoreRaycast?: boolean;
+};
+
+type ModelLoaderErrorBoundaryState = {
+  error: Error | null;
+  src: string;
 };
 
 export type ModelLoaderMetrics = {
@@ -54,6 +59,70 @@ type ModelDebugContext = {
 function getSourceExtension(src: string) {
   const normalized = src.split("?")[0].split("#")[0]?.toLowerCase() ?? src.toLowerCase();
   return normalized.slice(normalized.lastIndexOf(".") + 1);
+}
+
+function getReadableError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+  return {
+    message: String(error),
+    name: "UnknownError",
+    stack: undefined,
+  };
+}
+
+class ModelLoaderErrorBoundary extends React.Component<
+  { children: React.ReactNode; propsSnapshot: ModelLoaderProps },
+  ModelLoaderErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode; propsSnapshot: ModelLoaderProps }) {
+    super(props);
+    this.state = { error: null, src: props.propsSnapshot.src };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    const { propsSnapshot } = this.props;
+    const readableError = getReadableError(error);
+    console.error("[Control3D ModelLoader] Failed to load model asset", {
+      debugLabel: propsSnapshot.debugLabel,
+      error: readableError,
+      extension: getSourceExtension(propsSnapshot.src),
+      href: typeof window !== "undefined" ? window.location.href : null,
+      markAsTerrain: propsSnapshot.markAsTerrain,
+      src: propsSnapshot.src,
+    });
+    propsSnapshot.onSceneReady?.(null);
+  }
+
+  componentDidUpdate(prevProps: { propsSnapshot: ModelLoaderProps }) {
+    if (prevProps.propsSnapshot.src !== this.props.propsSnapshot.src) {
+      this.setState({ error: null, src: this.props.propsSnapshot.src });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <FallbackAsset
+          groundToY={this.props.propsSnapshot.groundToY}
+          markAsTerrain={this.props.propsSnapshot.markAsTerrain}
+          onSceneReady={this.props.propsSnapshot.onSceneReady}
+          wireframe={this.props.propsSnapshot.wireframe}
+        />
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 function cloneObjectScene(scene: THREE.Object3D, wireframe: boolean, markAsTerrain = false) {
@@ -829,7 +898,7 @@ function LoadedFbxModel({
   );
 }
 
-export function ModelLoader(props: ModelLoaderProps) {
+function ModelLoaderInner(props: ModelLoaderProps) {
   const extension = getSourceExtension(props.src);
 
   if (isFbxSource(props.src)) {
@@ -859,6 +928,14 @@ export function ModelLoader(props: ModelLoaderProps) {
   }
 
   return <LoadedModel {...props} />;
+}
+
+export function ModelLoader(props: ModelLoaderProps) {
+  return (
+    <ModelLoaderErrorBoundary propsSnapshot={props}>
+      <ModelLoaderInner {...props} />
+    </ModelLoaderErrorBoundary>
+  );
 }
 
 export function ThumbnailAutoFit({

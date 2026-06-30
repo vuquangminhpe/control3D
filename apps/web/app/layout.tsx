@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppNavbar } from "@/components/AppNavbar";
+import { ClientErrorLogger } from "@/components/ClientErrorLogger";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,6 +17,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <div className="app-shell">
+          <ClientErrorLogger />
           <AppNavbar />
           {children}
         </div>
