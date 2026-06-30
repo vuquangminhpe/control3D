@@ -218,7 +218,7 @@ export type DialogNode = {
 };
 
 const PLAYER_SPAWN_POSITION: [number, number, number] = [0, 1.5, 0];
-const ROBOT_SPAWN_POSITION: [number, number, number] = [0, 0, 0];
+const ROBOT_SPAWN_POSITION: [number, number, number] = [4, 0, 4];
 const DEFAULT_MAP_MODEL_URL = "";
 const CUSTOM_LEVELS_STORAGE_KEY = "control3d.customLevels.v1";
 const WEAPON_LOADOUTS_STORAGE_KEY = "control3d.weaponLoadouts.v1";
@@ -361,38 +361,7 @@ const DEFAULT_LEVEL: GameLevel = {
 };
 
 function createEnemiesFromLevel(level: GameLevel): EnemyState[] {
-  const configuredSpawns =
-    level.zombieSpawns.length > 0
-      ? level.zombieSpawns
-      : ([
-          {
-            id: "fallback-enemy-1",
-            type: "zombie_low",
-            position: [
-              level.playerSpawn[0] + 4,
-              level.playerSpawn[1],
-              level.playerSpawn[2] + 5,
-            ],
-          },
-          {
-            id: "fallback-enemy-2",
-            type: "zombie_low",
-            position: [
-              level.playerSpawn[0] - 5,
-              level.playerSpawn[1],
-              level.playerSpawn[2] + 7,
-            ],
-          },
-          {
-            id: "fallback-enemy-3",
-            type: "zombie_fantasy",
-            position: [
-              level.playerSpawn[0] + 7,
-              level.playerSpawn[1],
-              level.playerSpawn[2] - 5,
-            ],
-          },
-        ] satisfies ZombieSpawn[]);
+  const configuredSpawns = level.zombieSpawns;
 
   const enemies = configuredSpawns.map((spawn, index) => {
     const stats = getEnemyStats(spawn.type);
@@ -444,6 +413,10 @@ function normalizeLevel(level: GameLevel): GameLevel {
     mapCharacters: level.mapCharacters ?? [],
     placedObjects: level.placedObjects ?? [],
   };
+}
+
+function isPlayableLevel(level: GameLevel) {
+  return level.status === undefined || level.status === "published";
 }
 
 function normalizeWeaponLoadouts(input?: Partial<Record<WeaponType, Partial<WeaponLoadout>>>) {
@@ -1106,10 +1079,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   loadSavedLevels: async () => {
     if (typeof window === "undefined") return;
     try {
-      const response = await fetch("/api/levels", { cache: "no-store" });
+      let response = await fetch("/api/admin/maps", { cache: "no-store" });
+      if (!response.ok) {
+        response = await fetch("/api/levels", { cache: "no-store" });
+      }
       const payload = await response.json();
       if (response.ok && payload?.success && Array.isArray(payload.data)) {
-        const savedLevels = (payload.data as GameLevel[]).map(normalizeLevel);
+        const savedLevels = (payload.data as GameLevel[])
+          .map(normalizeLevel)
+          .filter((level) => level.status !== "archived");
         window.localStorage.setItem(CUSTOM_LEVELS_STORAGE_KEY, JSON.stringify(savedLevels));
         set({ savedLevels });
         return;
@@ -1120,7 +1098,9 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     try {
       const raw = window.localStorage.getItem(CUSTOM_LEVELS_STORAGE_KEY);
-      const savedLevels = raw ? (JSON.parse(raw) as GameLevel[]).map(normalizeLevel) : [];
+      const savedLevels = raw
+        ? (JSON.parse(raw) as GameLevel[]).map(normalizeLevel).filter(isPlayableLevel)
+        : [];
       set({ savedLevels });
     } catch {
       set({ savedLevels: [] });
@@ -1153,10 +1133,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   saveCustomLevel: async (input) => {
     if (typeof window === "undefined") return null;
     const now = new Date().toISOString();
-    const fallbackLevel: GameLevel = {
+    const levelInput = {
       ...input,
+      status: input.status ?? "published",
+      publishedAt: input.publishedAt ?? now,
+    };
+    const fallbackLevel: GameLevel = {
+      ...levelInput,
       storyGraph: normalizeStoryGraph(input.storyGraph),
-      id: input.id || `level-${Math.random().toString(36).slice(2, 9)}`,
+      id: levelInput.id || `level-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: input.id ? get().savedLevels.find((entry) => entry.id === input.id)?.createdAt ?? now : now,
       updatedAt: now,
     };
@@ -1165,7 +1150,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       const response = await fetch("/api/levels", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify(levelInput),
       });
       const payload = await response.json();
       if (response.ok && payload?.success) {

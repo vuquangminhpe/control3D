@@ -1,12 +1,16 @@
 "use client";
 
 export async function getCsrfToken() {
-  const response = await fetch("/api/auth/csrf", { cache: "no-store" });
-  const payload = await response.json();
-  if (!response.ok || !payload?.success || !payload.data?.csrfToken) {
-    throw new Error(payload?.error ?? "Unable to create CSRF token");
+  try {
+    const response = await fetch("/api/auth/csrf", { cache: "no-store" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.success || !payload.data?.csrfToken) {
+      return "";
+    }
+    return String(payload.data.csrfToken);
+  } catch {
+    return "";
   }
-  return String(payload.data.csrfToken);
 }
 
 export async function postJson<T>(
@@ -18,7 +22,8 @@ export async function postJson<T>(
     "content-type": "application/json",
   };
   if (options.csrf) {
-    headers["x-csrf-token"] = await getCsrfToken();
+    const csrfToken = await getCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
   }
 
   const response = await fetch(url, {
@@ -42,7 +47,8 @@ export async function patchJson<T>(
     "content-type": "application/json",
   };
   if (options.csrf) {
-    headers["x-csrf-token"] = await getCsrfToken();
+    const csrfToken = await getCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
   }
 
   const response = await fetch(url, {
@@ -60,7 +66,8 @@ export async function patchJson<T>(
 export async function postEmpty<T>(url: string, options: { csrf?: boolean } = {}) {
   const headers: Record<string, string> = {};
   if (options.csrf) {
-    headers["x-csrf-token"] = await getCsrfToken();
+    const csrfToken = await getCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
   }
   const response = await fetch(url, {
     method: "POST",
@@ -76,7 +83,8 @@ export async function postEmpty<T>(url: string, options: { csrf?: boolean } = {}
 export async function deleteJson<T>(url: string, options: { csrf?: boolean } = {}) {
   const headers: Record<string, string> = {};
   if (options.csrf) {
-    headers["x-csrf-token"] = await getCsrfToken();
+    const csrfToken = await getCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
   }
   const response = await fetch(url, {
     method: "DELETE",

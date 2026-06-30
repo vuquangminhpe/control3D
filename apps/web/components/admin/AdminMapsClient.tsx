@@ -8,6 +8,7 @@ import type {
   GameCharacterRecord,
   LevelRecord,
   MapCharacterRole,
+  ModelRecord,
 } from "@/lib/model-store";
 
 type AdminMePayload = {
@@ -27,6 +28,12 @@ type AssignmentDraft = {
   storyEnabled: boolean;
 };
 
+type MapFormState = {
+  name: string;
+  description: string;
+  mapModelUrl: string;
+};
+
 async function getJson<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
   const payload = await response.json().catch(() => null);
@@ -40,10 +47,17 @@ export function AdminMapsClient() {
   const [admin, setAdmin] = useState<AdminMePayload["admin"] | null>(null);
   const [maps, setMaps] = useState<LevelRecord[]>([]);
   const [characters, setCharacters] = useState<GameCharacterRecord[]>([]);
+  const [models, setModels] = useState<ModelRecord[]>([]);
+  const [mapForm, setMapForm] = useState<MapFormState>({
+    name: "",
+    description: "",
+    mapModelUrl: "",
+  });
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, AssignmentDraft>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCreatingMap, setIsCreatingMap] = useState(false);
 
   const stats = useMemo(() => {
     return maps.reduce(
@@ -56,24 +70,100 @@ export function AdminMapsClient() {
     );
   }, [maps]);
 
+  const mapAssets = useMemo(() => {
+    return models.filter((model) => {
+      const format = model.format?.toLowerCase();
+      return (
+        model.category === "environment" ||
+        model.category === "architecture" ||
+        format === "glb" ||
+        format === "gltf" ||
+        format === "fbx"
+      );
+    });
+  }, [models]);
+
   const load = async () => {
     setIsLoading(true);
     setMessage(null);
     setIsError(false);
     try {
       const me = await getJson<AdminMePayload>("/api/admin/auth/me");
-      const [mapRows, characterRows] = await Promise.all([
+      const [mapRows, characterRows, modelRows] = await Promise.all([
         getJson<LevelRecord[]>("/api/admin/maps"),
         getJson<GameCharacterRecord[]>("/api/admin/characters"),
+        getJson<ModelRecord[]>("/api/models"),
       ]);
       setAdmin(me.admin);
       setMaps(mapRows);
       setCharacters(characterRows);
+      setModels(modelRows);
     } catch (error) {
       setIsError(true);
       setMessage(error instanceof Error ? error.message : "Unable to load admin maps");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const createMap = async () => {
+    const name = mapForm.name.trim();
+    const mapModelUrl = mapForm.mapModelUrl.trim();
+    if (!name || !mapModelUrl) {
+      setIsError(true);
+      setMessage("Map name and map model URL are required.");
+      return;
+    }
+
+    setIsCreatingMap(true);
+    setMessage(null);
+    setIsError(false);
+    try {
+      const created = await postJson<LevelRecord>("/api/admin/maps", {
+        name,
+        description: mapForm.description.trim() || undefined,
+        status: "draft",
+        mapModelUrl,
+        playerCharacter: null,
+        playerSpawn: [0, 1.5, 0],
+        robotSpawn: [0, 0, 0],
+        robotStory: "",
+        storyGraph: {
+          nodes: [
+            {
+              id: "story-start",
+              kind: "start",
+              title: "Start",
+              text: "Story begins here.",
+              position: { x: 96, y: 160 },
+            },
+          ],
+          edges: [],
+          variables: [],
+        },
+        zombieSpawns: [],
+        mapCharacters: [],
+        placedObjects: [],
+        maxPlayers: 50,
+      }, { csrf: true });
+      setMapForm({ name: "", description: "", mapModelUrl: "" });
+      await load();
+      setAssignmentDrafts((current) => ({
+        ...current,
+        [created.id]: {
+          characterId: characters[0]?.id ?? "",
+          role: "playable",
+          isDefault: true,
+          pointPrice: "0",
+          storyEnabled: false,
+        },
+      }));
+      setMessage("Map created. Select a character below to assign it.");
+    } catch (error) {
+      setIsError(true);
+      setMessage(error instanceof Error ? error.message : "Create map failed");
+    } finally {
+      setIsCreatingMap(false);
     }
   };
 
@@ -210,6 +300,77 @@ export function AdminMapsClient() {
       {message ? (
         <p className={isError ? "error-text" : "success-text"}>{message}</p>
       ) : null}
+
+      <section className="admin-split-grid">
+        <div className="card admin-form-panel">
+          <span className="stat-label">Create map</span>
+          <label className="field">
+            Name
+            <input
+              onChange={(event) =>
+                setMapForm((current) => ({ ...current, name: event.target.value }))
+              }
+              placeholder="New gameplay map"
+              value={mapForm.name}
+            />
+          </label>
+          <label className="field">
+            Source map asset
+            <select
+              onChange={(event) => {
+                const selected = mapAssets.find((asset) => asset.fileUrl === event.target.value);
+                setMapForm((current) => ({
+                  ...current,
+                  mapModelUrl: event.target.value,
+                  name: current.name || selected?.name || "",
+                }));
+              }}
+              value={mapForm.mapModelUrl}
+            >
+              <option value="">Manual URL or select uploaded map</option>
+              {mapAssets.map((model) => (
+                <option key={model.id} value={model.fileUrl}>
+                  {model.name} ({model.format})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Map model URL
+            <input
+              onChange={(event) =>
+                setMapForm((current) => ({ ...current, mapModelUrl: event.target.value }))
+              }
+              placeholder="/upload-files/models/environment/map.glb"
+              value={mapForm.mapModelUrl}
+            />
+          </label>
+          <label className="field">
+            Description
+            <textarea
+              onChange={(event) =>
+                setMapForm((current) => ({ ...current, description: event.target.value }))
+              }
+              rows={3}
+              value={mapForm.description}
+            />
+          </label>
+          <button className="button" disabled={isCreatingMap} onClick={() => void createMap()} type="button">
+            {isCreatingMap ? "Creating..." : "Create map"}
+          </button>
+        </div>
+
+        <div className="card admin-list-panel">
+          <span className="stat-label">Next steps</span>
+          <div className="empty-state">
+            <h2>{maps.length ? "Assign and play" : "Add a map asset first"}</h2>
+            <p>
+              Create a map, assign a playable character as default, publish it,
+              then open the editor or Play Game.
+            </p>
+          </div>
+        </div>
+      </section>
 
       <section className="admin-map-table card">
         <div className="admin-map-row admin-map-row-head">

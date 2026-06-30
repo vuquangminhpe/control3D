@@ -17,7 +17,7 @@ import { AnimationActionPlayer, Player } from "./Player";
 import { Terrain } from "./Terrain";
 import { FloatingDamage, prewarmDamageTextures } from "./FloatingDamage";
 import { ModelLoader } from "@/components/3d/ModelLoader";
-import { CharacterEnemyBot, NpcBot } from "./EnemyBot";
+import { CharacterEnemyBot } from "./EnemyBot";
 import { preload3DModel } from "@/hooks/use3DModel";
 import { getIntelligentScaleMultiplier } from "@/lib/3d/camera";
 
@@ -120,11 +120,14 @@ function snapRuntimeToTerrain(terrain: THREE.Object3D) {
       position: [number, number, number],
       heightOffset: number,
     ): [number, number, number] => {
-      const groundY = getRuntimeTerrainY(
+      const groundY = Math.max(
+        getRuntimeTerrainY(
         terrain,
         position[0],
         position[2],
         position[1] - heightOffset,
+        ),
+        0,
       );
       return [
         Number(position[0].toFixed(2)),
@@ -134,7 +137,7 @@ function snapRuntimeToTerrain(terrain: THREE.Object3D) {
     };
 
     const snapObject = (position: [number, number, number]): [number, number, number] => {
-      const groundY = getRuntimeTerrainY(terrain, position[0], position[2], position[1]);
+      const groundY = Math.max(getRuntimeTerrainY(terrain, position[0], position[2], position[1]), 0);
       return [
         Number(position[0].toFixed(2)),
         Number(groundY.toFixed(2)),
@@ -190,6 +193,18 @@ function FloatingDamageLayer() {
   );
 }
 
+function SafetyGround() {
+  return (
+    <RigidBody type="fixed" colliders="cuboid" position={[0, -0.08, 0]}>
+      <mesh receiveShadow userData={{ isTerrainSurface: true }}>
+        <boxGeometry args={[92, 0.16, 92]} />
+        <meshStandardMaterial color="#202833" roughness={0.92} metalness={0.02} />
+      </mesh>
+      <gridHelper args={[92, 24, "#00d1b2", "#354250"]} position={[0, 0.09, 0]} />
+    </RigidBody>
+  );
+}
+
 function isEnvironmentAsset(name: string, fileUrl: string) {
   const lowerName = name.toLowerCase();
   const lowerUrl = fileUrl.toLowerCase();
@@ -214,6 +229,10 @@ function isEnvironmentAsset(name: string, fileUrl: string) {
   );
 }
 
+function isRuntimeMapLayer(object: { isMap?: boolean; name: string; fileUrl: string }) {
+  return object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
+}
+
 function PlacedObjectLayer() {
   const placedObjects = useGameStore((state) => state.activeLevel.placedObjects);
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
@@ -222,7 +241,7 @@ function PlacedObjectLayer() {
   return (
     <>
       {placedObjects.map((object, index) => {
-        const isEnv = object.isMap || isEnvironmentAsset(object.name, object.fileUrl);
+        const isEnv = isRuntimeMapLayer(object);
         const rotRad: [number, number, number] = [
           (object.rotation[0] * Math.PI) / 180,
           (object.rotation[1] * Math.PI) / 180,
@@ -233,7 +252,7 @@ function PlacedObjectLayer() {
           <Suspense fallback={null}>
             <ModelLoader
               debugLabel={`runtime-placed-object:${object.name}`}
-              fitMaxSize={isEnv ? 92 * mapScaleRatio : placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)}
+              fitMaxSize={isEnv ? 42 * mapScaleRatio : placedObjectMaxSize * getIntelligentScaleMultiplier(object.name)}
               groundToY={0}
               src={object.fileUrl}
               markAsTerrain={isEnv}
@@ -636,11 +655,11 @@ export function GameCanvas({
   const mapScaleRatio = useGameStore((state) => state.mapScaleRatio);
   const activeLevelId = useGameStore((state) => state.activeLevel.id);
   const activeLevel = useGameStore((state) => state.activeLevel);
-  const hasMap = Boolean(activeLevel.mapModelUrl);
+  const hasMapLayer = activeLevel.placedObjects.some(isRuntimeMapLayer);
+  const hasMap = Boolean(activeLevel.mapModelUrl) || hasMapLayer;
+  const shouldRenderTerrain = Boolean(activeLevel.mapModelUrl) && !hasMapLayer;
   const hasPlayerCharacter = Boolean(activeLevel.playerCharacter?.fileUrl);
   const enemies = useGameStore((state) => state.enemies);
-  const robotPosition = useGameStore((state) => state.robotPosition);
-
   const handleTerrainReady = useCallback((scene: THREE.Object3D) => {
     setTerrainScene(scene);
   }, []);
@@ -662,9 +681,13 @@ export function GameCanvas({
 
   useEffect(() => {
     setGroundReady(false);
-  }, [activeLevelId, activeLevel.mapModelUrl, worldVersion]);
+  }, [activeLevelId, activeLevel.mapModelUrl, hasMapLayer, worldVersion]);
 
   useEffect(() => {
+    if (hasMapLayer) {
+      setGroundReady(true);
+      return;
+    }
     if (!terrainScene || !hasMap) return;
     const frame = window.requestAnimationFrame(() => {
       snapRuntimeToTerrain(terrainScene);
@@ -672,7 +695,7 @@ export function GameCanvas({
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [activeLevelId, hasMap, terrainScene, worldVersion]);
+  }, [activeLevelId, hasMap, hasMapLayer, terrainScene, worldVersion]);
 
   return (
     <div className="game-canvas-container">
@@ -720,7 +743,8 @@ export function GameCanvas({
 
           <Physics gravity={[0, -19.8 * mapScaleRatio, 0]}>
             {/* Terrain Level */}
-            {hasMap ? <Terrain onReady={handleTerrainReady} /> : null}
+            <SafetyGround />
+            {shouldRenderTerrain ? <Terrain onReady={handleTerrainReady} /> : null}
             {groundReady ? <PlacedObjectLayer /> : null}
 
             {/* Playable Character */}
@@ -733,10 +757,6 @@ export function GameCanvas({
               enemies.map((enemy) => (
                 <CharacterEnemyBot key={enemy.id} enemy={enemy} mapScaleRatio={mapScaleRatio} />
               ))}
-            {groundReady && activeLevel.robotSpawn ? (
-              <NpcBot position={robotPosition} npcId="robot" />
-            ) : null}
-
           </Physics>
 
           <BowTrajectoryLayer />

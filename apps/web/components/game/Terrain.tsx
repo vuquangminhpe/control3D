@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { RigidBody } from "@react-three/rapier";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
@@ -14,6 +14,32 @@ type TerrainProps = {
 };
 
 const GAME_MAP_MAX_SIZE = 92;
+const FALLBACK_TERRAIN_SIZE = 92;
+
+class TerrainErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode; mapModelUrl: string },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode; mapModelUrl: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_error: unknown) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn("Terrain asset failed to load:", this.props.mapModelUrl, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
 
 function getHorizontalSpan(bounds: THREE.Box3) {
   const size = bounds.getSize(new THREE.Vector3());
@@ -127,8 +153,45 @@ function TerrainModel({ mapModelUrl, onReady, isPrimary = true }: TerrainProps &
   );
 }
 
+function FallbackTerrain({ mapModelUrl, onReady }: TerrainProps & { mapModelUrl: string }) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const setMapScaleRatio = useGameStore((state) => state.setMapScaleRatio);
+
+  useEffect(() => {
+    if (!groupRef.current) return;
+    onReady?.(groupRef.current);
+    setMapScaleRatio(1);
+    log3DDebug(
+      `terrain-fallback:${mapModelUrl}`,
+      "Terrain fallback activated",
+      { mapModelUrl, size: FALLBACK_TERRAIN_SIZE },
+      { once: true },
+    );
+  }, [mapModelUrl, onReady, setMapScaleRatio]);
+
+  return (
+    <RigidBody type="fixed" colliders="cuboid" position={[0, -0.05, 0]}>
+      <group ref={groupRef} name="terrain-fallback-root">
+        <mesh receiveShadow userData={{ isTerrainSurface: true }}>
+          <boxGeometry args={[FALLBACK_TERRAIN_SIZE, 0.1, FALLBACK_TERRAIN_SIZE]} />
+          <meshStandardMaterial color="#2f3a35" roughness={0.9} />
+        </mesh>
+        <gridHelper args={[FALLBACK_TERRAIN_SIZE, 24, "#5a6b61", "#3f4d46"]} position={[0, 0.052, 0]} />
+      </group>
+    </RigidBody>
+  );
+}
+
 export function Terrain({ onReady }: TerrainProps) {
   const mapModelUrl = useGameStore((state) => state.activeLevel.mapModelUrl);
   if (!mapModelUrl) return null;
-  return <TerrainModel mapModelUrl={mapModelUrl} onReady={onReady} isPrimary={true} />;
+  return (
+    <TerrainErrorBoundary
+      key={mapModelUrl}
+      fallback={<FallbackTerrain mapModelUrl={mapModelUrl} onReady={onReady} />}
+      mapModelUrl={mapModelUrl}
+    >
+      <TerrainModel mapModelUrl={mapModelUrl} onReady={onReady} isPrimary={true} />
+    </TerrainErrorBoundary>
+  );
 }
